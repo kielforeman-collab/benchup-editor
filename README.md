@@ -2,14 +2,14 @@
 
 ![BenchUp editor screenshot](assets/screenshots/benchup.jpg "BenchUp v0.6.7 desktop workspace")
 
-[![Try BenchUp in your browser](https://img.shields.io/badge/Try_BenchUp_in_your_browser-d63b32?style=for-the-badge)](https://benchup3d.github.io/editor/play/)
+[![Try BenchUp in your browser](https://img.shields.io/badge/Try_BenchUp_in_your_browser-d63b32?style=for-the-badge)](https://kielforeman-collab.github.io/benchup-editor/play/)
 
 ## Download for desktop
 
-[![Download for Windows x64](https://img.shields.io/badge/Windows_x64-0078D4?style=for-the-badge)](https://github.com/BenchUp3D/editor/releases/latest/download/io.github.BenchUp3D.BenchUp-win-x64-Setup.exe)
-[![Download for macOS Apple Silicon](https://img.shields.io/badge/macOS_Apple_Silicon-6E40C9?style=for-the-badge)](https://github.com/BenchUp3D/editor/releases/latest/download/io.github.BenchUp3D.BenchUp-osx-arm64-Setup.pkg)
-[![Download for Linux x64](https://img.shields.io/badge/Linux_x64-E95420?style=for-the-badge)](https://github.com/BenchUp3D/editor/releases/latest/download/io.github.BenchUp3D.BenchUp-linux-x64.AppImage)
-[![See all downloads](https://img.shields.io/badge/All_downloads-555555?style=for-the-badge)](https://github.com/BenchUp3D/editor/releases/latest)
+[![Download for Windows x64](https://img.shields.io/badge/Windows_x64-0078D4?style=for-the-badge)](https://github.com/kielforeman-collab/benchup-editor/releases/latest/download/io.github.BenchUp3D.BenchUp-win-x64-Setup.exe)
+[![Download for macOS Apple Silicon](https://img.shields.io/badge/macOS_Apple_Silicon-6E40C9?style=for-the-badge)](https://github.com/kielforeman-collab/benchup-editor/releases/latest/download/io.github.BenchUp3D.BenchUp-osx-arm64-Setup.pkg)
+[![Download for Linux x64](https://img.shields.io/badge/Linux_x64-E95420?style=for-the-badge)](https://github.com/kielforeman-collab/benchup-editor/releases/latest/download/io.github.BenchUp3D.BenchUp-linux-x64.AppImage)
+[![See all downloads](https://img.shields.io/badge/All_downloads-555555?style=for-the-badge)](https://github.com/kielforeman-collab/benchup-editor/releases/latest)
 
 A free, open-source 3D modeling app for woodworking and furniture design, written in Rust. Plan individual boards, wood joints, and complete assemblies with exact measurements before heading to the workshop. The same editor runs as a native Windows, macOS, or Linux application and in a desktop browser through WebAssembly.
 
@@ -225,7 +225,7 @@ branding and screenshot assets to `dist/site/`, and deploys them together. The
 main browser entry point (`index.html`) and `trunk serve` continue to open the
 editor directly.
 
-To enable publishing for `BenchUp3D/editor`:
+To enable publishing for `kielforeman-collab/benchup-editor`:
 
 1. In the repository, open **Settings → Pages → Build and deployment** and set
    **Source** to **GitHub Actions**. See the
@@ -238,8 +238,8 @@ To enable publishing for `BenchUp3D/editor`:
    for this automatic trigger to work. Ordinary branch pushes do not trigger
    either workflow.
 3. After the deployment succeeds, the landing page is at
-   <https://benchup3d.github.io/editor/> and its **Try in browser** links open
-   <https://benchup3d.github.io/editor/play/>. The workflow's environment link shows
+   <https://kielforeman-collab.github.io/benchup-editor/> and its **Try in browser** links open
+   <https://kielforeman-collab.github.io/benchup-editor/play/>. The workflow's environment link shows
    the actual URL if a custom domain is configured.
 
 All local page and editor asset links are relative, so the same package supports
