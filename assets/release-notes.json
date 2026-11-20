@@ -1,5 +1,35 @@
 [
   {
+    "version": "0.7.0",
+    "date": "2026-11-20",
+    "title": "Security hardening, runtime speedups, and faster web loading",
+    "sections": [
+      {
+        "title": "Faster web loading",
+        "changes": [
+          "Lazy-load the SketchUp import worker on demand instead of bundling it into the initial WebAssembly download.",
+          "Subset the display title font and enable full LTO plus wasm-opt size optimization for a significantly smaller browser download."
+        ]
+      },
+      {
+        "title": "Viewport, modeling, and UI performance",
+        "changes": [
+          "Speed up history seeking and cache hovered history previews across frames.",
+          "Optimize resident WGSL face, edge, and shadow shaders, dirty partial scene updates, touch pan/zoom, and section-plane drags.",
+          "Accelerate core face area calculation, small-ring plane checks, object validation, locked-geometry checks, shadow cache hits, and group label culling.",
+          "Avoid redundant preference re-parsing on save."
+        ]
+      },
+      {
+        "title": "Security and reliability",
+        "changes": [
+          "Harden SketchUp, BUP, and mesh import parsers with stricter bounds, zip/size limits, and validation.",
+          "Tighten Content Security Policy, sharing validation, and CI test coverage across core, app, WebAssembly, JavaScript, and Python suites."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.6.7",
     "date": "2026-11-10",
     "title": "Reference images, scale handles, and 3D Mouse navigation",

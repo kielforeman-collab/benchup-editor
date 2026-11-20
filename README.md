@@ -1,6 +1,6 @@
 # BenchUp
 
-![BenchUp editor screenshot](assets/screenshots/benchup.jpg "BenchUp v0.6.7 desktop workspace")
+![BenchUp editor screenshot](assets/screenshots/benchup.jpg "BenchUp v0.7.0 desktop workspace")
 
 [![Try BenchUp in your browser](https://img.shields.io/badge/Try_BenchUp_in_your_browser-d63b32?style=for-the-badge)](https://kielforeman-collab.github.io/benchup-editor/play/)
 
