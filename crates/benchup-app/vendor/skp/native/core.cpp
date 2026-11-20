@@ -212,6 +212,23 @@ std::map<std::string, std::string> attributes(const std::string& s) {
   return out;
 }
 
+std::size_t find_ci(const std::string& haystack, const char* needle, std::size_t pos) {
+  const std::size_t nlen = std::strlen(needle);
+  if (nlen == 0 || pos >= haystack.size() || nlen > haystack.size() - pos) return std::string::npos;
+  for (std::size_t i = pos; i + nlen <= haystack.size(); ++i) {
+    bool match = true;
+    for (std::size_t j = 0; j < nlen; ++j) {
+      if (std::tolower(static_cast<unsigned char>(haystack[i + j])) !=
+          std::tolower(static_cast<unsigned char>(needle[j]))) {
+        match = false;
+        break;
+      }
+    }
+    if (match) return i;
+  }
+  return std::string::npos;
+}
+
 // Watermarks of style.xml item 5001: `<screenimage>` entries, each naming its
 // image inside the SKP ZIP. Image bytes are filled in by the caller.
 std::vector<StyleWatermark> style_watermarks(const std::string& wmlist) {
@@ -244,7 +261,7 @@ std::vector<StyleWatermark> style_watermarks(const std::string& wmlist) {
     if (self_closing) {
       pos = gt + 1;
     } else {
-      auto close = wmlist.find("screenimage>", gt + 1);
+      auto close = find_ci(wmlist, "screenimage>", gt + 1);
       if (close == std::string::npos) break;
       auto close_lt = wmlist.rfind("</", close);
       if (close_lt != std::string::npos && close_lt >= gt + 1)
@@ -294,7 +311,7 @@ std::optional<RawStyle> style_xml(const ByteBuffer& bytes) {
       pos = gt + 1;
       continue;
     }
-    auto close = xml.find("item>", gt + 1);
+    auto close = find_ci(xml, "item>", gt + 1);
     if (close == std::string::npos) break;
     auto close_lt = xml.rfind("</", close);
     if (close_lt == std::string::npos || close_lt < gt + 1) {
@@ -320,7 +337,7 @@ std::optional<RawStyle> style_xml(const ByteBuffer& bytes) {
       std::string v_tag = v_hdr.substr(v_tstart, v_tlen);
       for (auto& ch : v_tag) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
       if (v_tag == "variant" && (v_hdr.empty() || v_hdr.back() != '/')) {
-        auto v_close = body.find("variant>", v_gt + 1);
+        auto v_close = find_ci(body, "variant>", v_gt + 1);
         if (v_close != std::string::npos) {
           auto v_close_lt = body.rfind("</", v_close);
           if (v_close_lt != std::string::npos && v_close_lt >= v_gt + 1) {
