@@ -359,6 +359,9 @@ pub struct BenchUpApp {
     hover: Option<u64>,
     outliner_hover: BTreeSet<u64>,
     history_preview: Option<Model>,
+    history_preview_key: Option<(u64, usize, usize, usize)>,
+    history_preview_cache: Option<((u64, usize, usize, usize), Model)>,
+    unreadable_preferences_backup: Option<String>,
     outliner_anchor: Option<u64>,
     outliner_filter: String,
     outliner_cache: sidebar::OutlinerCache,
@@ -542,6 +545,9 @@ impl BenchUpApp {
             hover: None,
             outliner_hover: BTreeSet::new(),
             history_preview: None,
+            history_preview_key: None,
+            history_preview_cache: None,
+            unreadable_preferences_backup: None,
             outliner_anchor: None,
             outliner_filter: String::new(),
             outliner_cache: Default::default(),
@@ -771,21 +777,21 @@ impl BenchUpApp {
         }
     }
     fn finish_edit(&mut self, label: &str, before: Model, ctx: &egui::Context) {
-        let edited = before != self.doc.model;
-        if edited && !self.shared_edit_allowed(ctx) {
-            self.doc.model = before;
-            self.say(ctx, self.shared_edit_block_reason(ctx));
+        if !self.shared_edit_allowed(ctx) {
+            if before != self.doc.model {
+                self.doc.model = before;
+                self.say(ctx, self.shared_edit_block_reason(ctx));
+            }
             return;
         }
-        if edited {
-            let author = self.current_history_author();
-            self.doc.history.record_applied_attributed(
-                label,
-                before,
-                &self.doc.model,
-                Some(author),
-                Some(sharing::now_timestamp()),
-            );
+        let author = self.current_history_author();
+        if self.doc.history.record_applied_attributed_if_changed(
+            label,
+            before,
+            &self.doc.model,
+            Some(author),
+            Some(sharing::now_timestamp()),
+        ) {
             self.finish_recorded_edit(ctx, true);
         }
     }
@@ -816,18 +822,35 @@ impl BenchUpApp {
     }
     fn preview_history(&mut self, target: usize) {
         self.history_preview = None;
+        self.history_preview_key = None;
         if target == self.doc.history.position() {
             return;
+        }
+        let key = (
+            self.document_model.revision(),
+            self.doc.history.position(),
+            self.doc.history.labels().count(),
+            target,
+        );
+        if let Some((cached_key, cached_model)) = self.history_preview_cache.take() {
+            if cached_key == key {
+                self.history_preview = Some(cached_model);
+                self.history_preview_key = Some(key);
+                return;
+            }
         }
         let mut history = self.doc.history.clone();
         let mut model = self.doc.model.clone();
         if history.seek(&mut model, target) {
             self.history_preview = Some(model);
+            self.history_preview_key = Some(key);
         }
     }
     fn navigate_history(&mut self, ctx: &egui::Context, target: usize) {
         if !self.shared_edit_allowed(ctx) { self.say(ctx, self.shared_edit_block_reason(ctx)); return; }
         self.history_preview = None;
+        self.history_preview_key = None;
+        self.history_preview_cache = None;
         self.drawing_reference = None;
         self.drawing_guide = None;
         self.drawing_axis_guides.clear();
@@ -5699,20 +5722,21 @@ impl BenchUpApp {
                         && !object.name.trim().is_empty()
                         && entities.get(object.id).displayed(display)
                 }) else { continue; };
-                if let Some(position) = self.picking_cache.marker_visible(
+                let Some(position) = screen(marker.point).filter(|pos| rect.contains(*pos)) else {
+                    continue;
+                };
+                if self.picking_cache.marker_visible(
                     &self.face_cache, entities, camera, size, marker.point, &marker.owners,
-                ).then(|| screen(marker.point)).flatten() {
-                    if rect.contains(position) {
-                        let is_selected = selected.contains(&object.id);
-                        let foreground = if is_selected { Color32::WHITE } else { colors.ink };
-                        let background = if is_selected { ACCENT } else { colors.paper };
-                        let galley = p.layout_no_wrap(
-                            object.name.clone(), egui::FontId::proportional(13.), foreground,
-                        );
-                        let label = egui::Rect::from_center_size(position, galley.size());
-                        p.rect_filled(label.expand2(egui::vec2(5., 3.)), 3., background);
-                        p.galley(label.min, galley, foreground);
-                    }
+                ) {
+                    let is_selected = selected.contains(&object.id);
+                    let foreground = if is_selected { Color32::WHITE } else { colors.ink };
+                    let background = if is_selected { ACCENT } else { colors.paper };
+                    let galley = p.layout_no_wrap(
+                        object.name.clone(), egui::FontId::proportional(13.), foreground,
+                    );
+                    let label = egui::Rect::from_center_size(position, galley.size());
+                    p.rect_filled(label.expand2(egui::vec2(5., 3.)), 3., background);
+                    p.galley(label.min, galley, foreground);
                 }
             }
         }
@@ -6591,7 +6615,12 @@ impl eframe::App for BenchUpApp {
         let _profile = viewport_benchmark::scope("ui");
         // Rebuilt by visible Outliner rows; closing the inspector clears the highlight too.
         self.outliner_hover.clear();
-        self.history_preview = None;
+        if let (Some(key), Some(model)) = (
+            self.history_preview_key.take(),
+            self.history_preview.take(),
+        ) {
+            self.history_preview_cache = Some((key, model));
+        }
         self.account.poll(&ctx);
         self.poll_project(&ctx);
         self.poll_reference_image(&ctx);

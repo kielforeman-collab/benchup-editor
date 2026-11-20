@@ -74,15 +74,15 @@ impl Model {
         if vertices.is_empty() && dimensions.is_empty() && texts.is_empty() && guides.is_empty() {
             return Err(tr!("core.modeling.select_geometry_a_dimension_text_or_a_guide"));
         }
-        let protected: BTreeSet<_> = self
-            .edges
-            .keys()
-            .chain(self.faces.keys())
-            .copied()
-            .filter(|id| self.is_locked(*id))
-            .collect();
-        if !vertices.is_disjoint(&self.selection_vertices(&protected)) {
-            return Err(tr!("core.modeling.unlock_the_connected_geometry_before_editing_it"));
+        if !self.locked.is_empty() {
+            let protected: BTreeSet<_> = self
+                .expand_entities(&self.locked)
+                .into_iter()
+                .filter(|id| self.edges.contains_key(id) || self.faces.contains_key(id))
+                .collect();
+            if !vertices.is_disjoint(&self.selection_vertices(&protected)) {
+                return Err(tr!("core.modeling.unlock_the_connected_geometry_before_editing_it"));
+            }
         }
         let mut next = self.clone();
         for id in guides {
@@ -755,15 +755,15 @@ impl MovePreview {
         if vertices.is_empty() && dimensions.is_empty() && texts.is_empty() && guides.is_empty() {
             return Err(tr!("core.modeling.select_geometry_a_dimension_text_or_a_guide"));
         }
-        let protected = model
-            .edges
-            .keys()
-            .chain(model.faces.keys())
-            .copied()
-            .filter(|id| model.is_locked(*id))
-            .collect();
-        if !vertices.is_disjoint(&model.selection_vertices(&protected)) {
-            return Err(tr!("core.modeling.unlock_the_connected_geometry_before_editing_it"));
+        if !model.locked.is_empty() {
+            let protected: BTreeSet<_> = model
+                .expand_entities(&model.locked)
+                .into_iter()
+                .filter(|id| model.edges.contains_key(id) || model.faces.contains_key(id))
+                .collect();
+            if !vertices.is_disjoint(&model.selection_vertices(&protected)) {
+                return Err(tr!("core.modeling.unlock_the_connected_geometry_before_editing_it"));
+            }
         }
         let edges = model
             .edges

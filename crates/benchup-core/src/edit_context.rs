@@ -358,13 +358,27 @@ impl Model {
     }
     /// Component dependency edges run from nested definitions to their containers.
     fn definition_dependencies(&self) -> Result<BTreeMap<Uuid, BTreeMap<Uuid, u64>>, &'static str> {
+        let mut parents = BTreeMap::new();
+        for (id, object) in &self.objects {
+            for child in &object.entities {
+                if self.objects.contains_key(child) {
+                    parents.insert(*child, *id);
+                }
+            }
+        }
+        self.definition_dependencies_with_parents(&parents)
+    }
+    fn definition_dependencies_with_parents(
+        &self,
+        parents: &BTreeMap<u64, u64>,
+    ) -> Result<BTreeMap<Uuid, BTreeMap<Uuid, u64>>, &'static str> {
         let mut graph: BTreeMap<_, BTreeMap<_, _>> = BTreeMap::new();
         for object in self.objects.values() {
             let ObjectKind::Component { definition } = object.kind else {
                 continue;
             };
             graph.entry(definition).or_default();
-            let mut parent = self.parent(object.id);
+            let mut parent = parents.get(&object.id).copied();
             while let Some(id) = parent {
                 if let ObjectKind::Component {
                     definition: container,
@@ -375,13 +389,25 @@ impl Model {
                     }
                     graph.entry(definition).or_default().insert(container, id);
                 }
-                parent = self.parent(id);
+                parent = parents.get(&id).copied();
             }
         }
         Ok(graph)
     }
     pub(crate) fn validate_definition_nesting(&self) -> Result<(), &'static str> {
-        let mut graph = self.definition_dependencies()?;
+        let graph = self.definition_dependencies()?;
+        Self::validate_definition_graph(graph)
+    }
+    pub(crate) fn validate_definition_nesting_with_parents(
+        &self,
+        parents: &BTreeMap<u64, u64>,
+    ) -> Result<(), &'static str> {
+        let graph = self.definition_dependencies_with_parents(parents)?;
+        Self::validate_definition_graph(graph)
+    }
+    fn validate_definition_graph(
+        mut graph: BTreeMap<Uuid, BTreeMap<Uuid, u64>>,
+    ) -> Result<(), &'static str> {
         while !graph.is_empty() {
             let leaves: BTreeSet<_> = graph
                 .keys()

@@ -433,9 +433,24 @@ impl History {
         author: Option<HistoryAuthor>,
         timestamp: Option<u64>,
     ) {
-        let validated = self.validated;
-        self.record_attributed(label, before, after, author, timestamp);
-        self.validated = validated;
+        let _ = self.record_applied_attributed_if_changed(label, before, after, author, timestamp);
+    }
+    /// Record an applied edit when `before` and `after` differ, returning whether
+    /// an entry was recorded. Computes `ModelChange::between` once.
+    pub fn record_applied_attributed_if_changed(
+        &mut self,
+        label: impl Into<String>,
+        before: Model,
+        after: &Model,
+        author: Option<HistoryAuthor>,
+        timestamp: Option<u64>,
+    ) -> bool {
+        let change = ModelChange::between(&before, after);
+        if change.is_empty() {
+            return false;
+        }
+        self.push_change(label, change, author, timestamp);
+        true
     }
     /// Keep shared catalog definitions current without adding an object edit.
     /// Presence remains part of each edit, so undoing an assignment still removes
@@ -665,14 +680,21 @@ impl History {
         let mut history = self.clone();
         let mut candidate = model.clone();
         while history.position() != position {
-            let did = if history.position() > position {
-                history.undo(&mut candidate)
+            let (from, to, forward) = if history.position() > position {
+                (&mut history.undo, &mut history.redo, false)
             } else {
-                history.redo(&mut candidate)
+                (&mut history.redo, &mut history.undo, true)
             };
-            if !did {
+            let Some(entry) = from.pop() else {
+                return false;
+            };
+            if !entry.change.apply_checked(&mut candidate, forward) {
                 return false;
             }
+            to.push(entry);
+        }
+        if candidate.validate().is_err() {
+            return false;
         }
         *self = history;
         *model = candidate;
