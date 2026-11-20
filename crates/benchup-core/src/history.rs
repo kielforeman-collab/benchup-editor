@@ -699,6 +699,8 @@ impl History {
         if self.undo.len() > keep_undo {
             self.undo.drain(..self.undo.len() - keep_undo);
         }
+        const MAX_HISTORY_VALIDATION_WORK: usize = 500_000;
+        let mut validation_work = 0usize;
         let valid =
             [(&self.undo, false), (&self.redo, true)]
                 .into_iter()
@@ -708,7 +710,12 @@ impl History {
                     }
                     let mut candidate = model.clone();
                     entries.iter().rev().all(|entry| {
-                        entry.change.apply_checked(&mut candidate, forward)
+                        let cost = candidate.vertices.len()
+                            + candidate.edges.len()
+                            + candidate.faces.len();
+                        validation_work = validation_work.saturating_add(cost.max(1));
+                        validation_work <= MAX_HISTORY_VALIDATION_WORK
+                            && entry.change.apply_checked(&mut candidate, forward)
                             && candidate.validate().is_ok()
                     })
                 });
