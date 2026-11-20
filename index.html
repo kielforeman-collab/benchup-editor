@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https: wss: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self';" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#d94836" />
     <meta name="description" content="BenchUp — a precise little space for your next big idea. A Rust 3D modeler for desktop and web." />
@@ -61,7 +62,11 @@
           const bounds = canvas.getBoundingClientRect();
           const x = (touch.clientX - bounds.left) * canvas.clientWidth / bounds.width;
           const y = (touch.clientY - bounds.top) * canvas.clientHeight / bounds.height;
-          const rects = JSON.parse(canvas.getAttribute("data-model-viewports") || "[]");
+          let rects = [];
+          try {
+            const parsed = JSON.parse(canvas.getAttribute("data-model-viewports") || "[]");
+            if (Array.isArray(parsed)) rects = parsed;
+          } catch {}
           return rects.some(([left, top, right, bottom]) =>
             x >= left && x <= right && y >= top && y <= bottom);
         };

@@ -148,7 +148,9 @@ static bool is_prop_container_tag(const std::string& t) {
 // stringify_attr_dictionaries() is for scene/JSON/IFC strings. An A438
 // with no children (Python: None) or an unrecognized value tag is Null
 // - a real, present key, not a missing key.
-static ParsedAttribute decode_a438_value(const ByteBuffer& p, size_t a, size_t z) {
+static ParsedAttribute decode_a438_value(const ByteBuffer& p, size_t a, size_t z,
+                                         unsigned depth = 0) {
+  if (depth > kMaxRecursionDepth) throw std::runtime_error("attribute recursion limit exceeded");
   auto spans = parse_flat_spans(p, a, z);
   if (spans.empty()) return ParsedAttribute::null();
   auto& [tag, span] = spans[0];
@@ -177,7 +179,7 @@ static ParsedAttribute decode_a438_value(const ByteBuffer& p, size_t a, size_t z
     for (auto& [ctag, cspan] : parse_flat_spans(p, sa, sz)) {
       if (ctag != "A438") continue;
       auto [ca, cz] = cspan;
-      items.push_back(decode_a438_value(p, ca, cz));
+      items.push_back(decode_a438_value(p, ca, cz, depth + 1));
     }
     return ParsedAttribute::from_array(std::move(items));
   }
@@ -195,24 +197,26 @@ static ParsedAttribute decode_a438_value(const ByteBuffer& p, size_t a, size_t z
 // entries walk recurse into every container-tagged node, not just scan
 // one level.
 static void extract_attribute_dictionaries(const ByteBuffer& p, ParsedAttrDictionaries& out) {
-  std::function<void(size_t, size_t, ParsedAttrDict&)> extract_entries;
-  extract_entries = [&](size_t a, size_t z, ParsedAttrDict& entries) {
+  std::function<void(size_t, size_t, ParsedAttrDict&, unsigned)> extract_entries;
+  extract_entries = [&](size_t a, size_t z, ParsedAttrDict& entries, unsigned depth) {
+    if (depth > kMaxRecursionDepth) throw std::runtime_error("attribute recursion limit exceeded");
     std::string key;
     for (auto& [tag, span] : parse_flat_spans(p, a, z)) {
       auto [sa, sz] = span;
       if (tag == "B636") {
         key = std::string(reinterpret_cast<const char*>(p.data() + sa), sz - sa);
       } else if (tag == "A438" && !key.empty()) {
-        entries[key] = decode_a438_value(p, sa, sz);
+        entries[key] = decode_a438_value(p, sa, sz, depth + 1);
         key.clear();
       } else if (is_prop_container_tag(tag)) {
-        extract_entries(sa, sz, entries);
+        extract_entries(sa, sz, entries, depth + 1);
       }
     }
   };
 
-  std::function<void(size_t, size_t)> walk_dicts;
-  walk_dicts = [&](size_t a, size_t z) {
+  std::function<void(size_t, size_t, unsigned)> walk_dicts;
+  walk_dicts = [&](size_t a, size_t z, unsigned depth) {
+    if (depth > kMaxRecursionDepth) throw std::runtime_error("attribute recursion limit exceeded");
     auto here = parse_flat_spans(p, a, z);
     for (std::size_t i = 0; i < here.size(); ++i) {
       auto& [tag, span] = here[i];
@@ -222,16 +226,16 @@ static void extract_attribute_dictionaries(const ByteBuffer& p, ParsedAttrDictio
         ParsedAttrDict entries;
         if (i + 1 < here.size()) {
           auto [ea, ez] = here[i + 1].second;
-          extract_entries(ea, ez, entries);
+          extract_entries(ea, ez, entries, depth + 1);
         }
         out[name] = std::move(entries);
       } else if (is_prop_container_tag(tag)) {
-        walk_dicts(sa, sz);
+        walk_dicts(sa, sz, depth + 1);
       }
     }
   };
 
-  walk_dicts(0, p.size());
+  walk_dicts(0, p.size(), 0);
 }
 
 void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {

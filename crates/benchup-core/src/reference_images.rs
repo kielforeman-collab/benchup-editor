@@ -212,6 +212,10 @@ impl Model {
         Ok(id)
     }
     pub(crate) fn validate_reference_images(&self) -> Result<(), &'static str> {
+        if self.image_assets.len() > 256 {
+            return Err("Invalid reference image.");
+        }
+        let mut referenced = BTreeSet::new();
         for (id, image) in &self.reference_images {
             let Some(face) = self.faces.get(id) else {
                 return Err("Reference image frame is missing.");
@@ -224,6 +228,17 @@ impl Model {
                 || image.vertices.iter().any(|id| !face.vertices.contains(id))
                 || image.vertices.iter().collect::<BTreeSet<_>>().len() != 4
             {
+                return Err("Invalid reference image.");
+            }
+            referenced.insert(image.asset);
+        }
+        let mut total_bytes = 0usize;
+        for (id, asset) in &self.image_assets {
+            if !referenced.contains(id) || !asset.valid() {
+                return Err("Invalid reference image.");
+            }
+            total_bytes = total_bytes.saturating_add(asset.png.len());
+            if total_bytes > 128 * 1024 * 1024 {
                 return Err("Invalid reference image.");
             }
         }

@@ -236,6 +236,7 @@ impl Account {
                     let mut limits = image::Limits::default();
                     limits.max_image_width = Some(4096);
                     limits.max_image_height = Some(4096);
+                    limits.max_alloc = Some(64 * 1024 * 1024);
                     reader.limits(limits);
                     let image = reader
                         .decode()

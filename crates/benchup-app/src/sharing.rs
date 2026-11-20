@@ -171,6 +171,13 @@ fn valid_id(id: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
+fn valid_token(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':'))
+}
 pub(super) fn now_timestamp() -> u64 {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -403,7 +410,9 @@ impl BenchUpApp {
         remote: Remote,
         kind: Kind,
     ) -> Result<(), String> {
-        if !matches!(remote.role.as_str(), "owner" | "edit" | "view" | "none") {
+        if !valid_id(&remote.id)
+            || !matches!(remote.role.as_str(), "owner" | "edit" | "view" | "none")
+        {
             return Err(tr!("sharing.invalid_server_access_response").into());
         }
         if !matches!(&kind, Kind::Create)
@@ -1046,6 +1055,9 @@ impl BenchUpApp {
             }
             "notification_approve" | "notification_deny" => {
                 if let Some((project, request)) = argument.split_once('/') {
+                    if !valid_id(project) || !valid_token(request) {
+                        return;
+                    }
                     self.sharing_request(
                         ctx,
                         Kind::NotificationDecision,
@@ -1056,6 +1068,9 @@ impl BenchUpApp {
             }
             "approve" | "deny" => {
                 if let Some(id) = self.sharing.active.clone() {
+                    if !valid_id(&id) || !valid_token(argument) {
+                        return;
+                    }
                     self.sharing_request(
                         ctx,
                         Kind::Access,
@@ -1463,6 +1478,7 @@ impl BenchUpApp {
                     let mut limits = image::Limits::default();
                     limits.max_image_width = Some(4096);
                     limits.max_image_height = Some(4096);
+                    limits.max_alloc = Some(64 * 1024 * 1024);
                     reader.limits(limits);
                     let image = reader
                         .decode()
@@ -1492,19 +1508,22 @@ impl BenchUpApp {
         }
         if self.sharing.avatar_pending.is_none() {
             if let Some(remote) = &self.sharing.remote {
-                if let Some(lease) = remote.locks.iter().find(|l| {
-                    live.contains(&l.id)
-                        && l.has_avatar
-                        && !self.sharing.avatars.contains_key(&l.id)
-                        && !self.sharing.avatar_failed.contains(&l.id)
-                }) {
-                    let receiver = self.account.project_request(
-                        ctx,
-                        &format!("/api/projects/{}/avatar/{}", remote.id, lease.id),
-                        None,
-                        self.sharing.guest.clone(),
-                    );
-                    self.sharing.avatar_pending = Some((lease.id.clone(), receiver));
+                if valid_id(&remote.id) {
+                    if let Some(lease) = remote.locks.iter().find(|l| {
+                        live.contains(&l.id)
+                            && l.has_avatar
+                            && valid_token(&l.id)
+                            && !self.sharing.avatars.contains_key(&l.id)
+                            && !self.sharing.avatar_failed.contains(&l.id)
+                    }) {
+                        let receiver = self.account.project_request(
+                            ctx,
+                            &format!("/api/projects/{}/avatar/{}", remote.id, lease.id),
+                            None,
+                            self.sharing.guest.clone(),
+                        );
+                        self.sharing.avatar_pending = Some((lease.id.clone(), receiver));
+                    }
                 }
             }
         }

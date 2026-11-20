@@ -329,6 +329,7 @@ struct Archive {
   std::optional<uint64_t> annot_watermark;
   std::vector<int> burn_stack;  // per-entity-list burned-item credits
   std::optional<size_t> cline_tail;
+  unsigned depth{};
 
   Archive(const ByteBuffer& d, int v) : r{d}, ver(v), pid(v >= 17) {}
 
@@ -340,6 +341,11 @@ struct Archive {
 
   std::tuple<uint64_t, std::string, std::shared_ptr<V>> object(
       std::optional<std::string> expect = {}) {
+    if (depth > kMaxRecursionDepth) throw std::runtime_error("legacy archive recursion limit exceeded");
+    struct DepthGuard {
+      unsigned& d;
+      ~DepthGuard() { --d; }
+    } guard{++depth};
     auto tag = r.u16();
     if (!tag) return {};
     if (tag == 0x7fff) {
@@ -1155,7 +1161,9 @@ struct Archive {
   // Reads one typed CAttributeNamed value off the stream. Matches Python's
   // `_read_attr_named.read_typed` - int/float/str/None/3-tuple/list, not a
   // stringified view. `properties` still stringifies via stringify_attr_dict.
-  ParsedAttribute typed(uint8_t t) {
+  ParsedAttribute typed(uint8_t t, unsigned attr_depth = 0) {
+    if (attr_depth > kMaxRecursionDepth)
+      throw std::runtime_error("legacy attribute recursion limit exceeded");
     switch (t) {
       case 0:
         return ParsedAttribute::null();
@@ -1174,9 +1182,10 @@ struct Archive {
       case 11: {
         auto n = r.u32();
         if (n > 100000) throw std::runtime_error("attr array too large");
+        r.need(n);
         std::vector<ParsedAttribute> items;
         items.reserve(n);
-        while (n--) items.push_back(typed(r.u8()));
+        while (n--) items.push_back(typed(r.u8(), attr_depth + 1));
         return ParsedAttribute::from_array(std::move(items));
       }
       case 17: {  // 3D point (Geom::Point3d)
@@ -1407,6 +1416,7 @@ WalkResult walk_model_on(Archive& ar, const ByteBuffer& data, int ver, size_t st
   std::vector<std::pair<uint64_t, std::shared_ptr<V>>> mats, layers;
   for (uint32_t i = 0; i < mat_count; ++i) {
     auto q = ar.object("CMaterial");
+    if (!std::get<2>(q) || std::get<2>(q)->k != "material") continue;
     mats.push_back({std::get<0>(q), std::get<2>(q)});
   }
   ar.r.u32();
@@ -1529,6 +1539,7 @@ ParsedAttrDictionaries extract_legacy_attribute_dictionaries(
 void fill(GeometryBuilder& b,
           const std::vector<std::tuple<uint64_t, std::string, std::shared_ptr<V>>>& ents,
           const std::unordered_map<uint64_t, Entry>& slots) {
+  std::size_t total_coedges = 0;
   for (auto& x : ents) {
     auto s = std::get<0>(x);
     auto v = std::get<2>(x);
@@ -1536,14 +1547,19 @@ void fill(GeometryBuilder& b,
     if (v->k == "edge")
       add_edge(b, s, *v, slots);
     else if (v->k == "face") {
+      if (v->plane.size() < 3) continue;
       RawFace f;
       f.normal = {v->plane[0], v->plane[1], v->plane[2]};
       if (v->mat) f.material_id = v->mat;
       if (v->back_mat) f.back_material_id = v->back_mat;
       f.hidden = v->hidden != 0;
       for (auto& lp : v->loops) {
+        if (!lp) continue;
         std::vector<CoEdge> co;
         for (auto& u : lp->uses) {
+          if (!u) continue;
+          if (++total_coedges > 1000000)
+            throw std::runtime_error("benchup.skp.model_too_large");
           auto i = slots.find(u->edge);
           if (i != slots.end() && i->second.v) {
             add_edge(b, u->edge, *i->second.v, slots);
@@ -1878,10 +1894,11 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
           lh = i;
           break;
         }
-      if (lh == std::string::npos)
+      const size_t prefix = ver >= 17 ? 9 : 8;
+      if (lh == std::string::npos || lh < prefix)
         throw std::runtime_error("no CMaterial or CLayer class record found");
       mc = 0;
-      start = lh - (ver >= 17 ? 9 : 8);
+      start = lh - prefix;
     }
 
     std::vector<uint64_t> bases;
@@ -1898,6 +1915,7 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
     auto& mats = walked.materials;
     for (auto& m : mats) {
       auto v = m.second;
+      if (!v) continue;
       auto x = std::make_shared<RawMaterial>();
       x->name = v->name;
       x->r = v->r;

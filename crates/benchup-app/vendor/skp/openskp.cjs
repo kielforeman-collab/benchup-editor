@@ -172,9 +172,11 @@ function readMetaUnits(metaBytes) {
   }
   return null;
 }
-var MAX_UNCOMPRESSED_ENTRY_BYTES = 16 * 1024 * 1024 * 1024;
-var MAX_COMPRESSION_RATIO = 1e3;
-var RATIO_CHECK_THRESHOLD_BYTES = 1024 * 1024;
+var MAX_UNCOMPRESSED_ENTRY_BYTES = 256 * 1024 * 1024;
+var MAX_TOTAL_EXTRACTED_BYTES = 512 * 1024 * 1024;
+var MAX_COMPRESSION_RATIO = 200;
+var RATIO_CHECK_THRESHOLD_BYTES = 64 * 1024;
+var MAX_TLV_RECURSION_DEPTH = 128;
 function validateEntrySize(file) {
   const declared = file.originalSize;
   if (declared <= 0) return;
@@ -202,10 +204,17 @@ function extractSkpContents(data, options) {
   const version = readVersion(data, options);
   const zipOffset = findZipOffset(data);
   const zipBytes = data.subarray(zipOffset);
+  let totalUncompressed = 0;
   const wanted = (file) => {
     const lower = file.name.toLowerCase();
-    const isWanted = lower === "model.dat" || lower.endsWith("/model.dat") || lower === "meta/meta.dat" || lower.endsWith(".xml") || lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.includes("material");
-    if (isWanted) validateEntrySize(file);
+    const isWanted = lower === "model.dat" || lower.endsWith("/model.dat") || lower === "meta/meta.dat" || lower.endsWith(".xml") || lower.includes("material");
+    if (isWanted) {
+      validateEntrySize(file);
+      totalUncompressed += Math.max(0, file.originalSize || 0);
+      if (totalUncompressed > MAX_TOTAL_EXTRACTED_BYTES) {
+        throw new Error("ZIP archive exceeds cumulative extraction budget");
+      }
+    }
     return isWanted;
   };
   let unzipped;
@@ -313,6 +322,9 @@ function parseVarInt(data, offset, length) {
   return val;
 }
 function parseTlvRecursive(data, start, end, containerTags = CONTAINER_TAGS, depth = 0) {
+  if (depth > MAX_TLV_RECURSION_DEPTH) {
+    throw new Error("TLV recursion depth limit exceeded");
+  }
   let pos = start;
   const elements = [];
   while (pos <= end - 6) {

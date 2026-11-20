@@ -98,14 +98,29 @@ pub(crate) fn encode(json: &str) -> Result<Vec<u8>, String> {
         .map_err(|error| tr!("project_files.could_not_compress_project", error = error))
 }
 
+pub const MAX_PROJECT_BYTES: usize = 128 * 1024 * 1024;
+
 pub fn decode(bytes: &[u8]) -> Result<Document, String> {
+    if bytes.len() > MAX_PROJECT_BYTES {
+        return Err(tr!(
+            "project_files.could_not_decompress_project",
+            error = "project file exceeds 128 MiB limit"
+        ));
+    }
     // Detect the content rather than the extension so all project extensions
     // accept compressed files and older, plain JSON files unchanged.
     let mut decompressed = Vec::new();
     let bytes: &[u8] = if bytes.starts_with(&[0x1f, 0x8b]) {
         MultiGzDecoder::new(bytes)
+            .take((MAX_PROJECT_BYTES as u64) + 1)
             .read_to_end(&mut decompressed)
             .map_err(|error| tr!("project_files.could_not_decompress_project", error = error))?;
+        if decompressed.len() > MAX_PROJECT_BYTES {
+            return Err(tr!(
+                "project_files.could_not_decompress_project",
+                error = "decompressed project exceeds 128 MiB limit"
+            ));
+        }
         &decompressed
     } else {
         bytes
@@ -144,6 +159,12 @@ pub fn open(ctx: &eframe::egui::Context) -> Pending {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn read_project(path: PathBuf) -> Result<Outcome, String> {
+        if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > MAX_PROJECT_BYTES as u64 {
+            return Err(tr!(
+                "project_files.could_not_decompress_project",
+                error = "project file exceeds 128 MiB limit"
+            ));
+        }
         let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
         decode(&bytes).map(|mut doc| {
             if let Some(link) = &mut doc.shared_project {
@@ -246,15 +267,22 @@ pub fn open(ctx: &eframe::egui::Context) -> Pending {
             .pick_file()
             .await
         {
-            match wasm_bindgen_futures::JsFuture::from(file.inner().array_buffer()).await {
-                Ok(buffer) => decode(&js_sys::Uint8Array::new(&buffer).to_vec()).map(|mut doc| {
-                    if let Some(link) = &mut doc.shared_project {
-                        link.file_updated_at = (file.inner().last_modified() / 1000.) as u64;
-                    }
-                    set_document_name(&mut doc, std::path::Path::new(&file.file_name()));
-                    Outcome::BrowserOpened(Box::new(doc), file.file_name(), format!("{}:{}:{}", file.file_name(), file.inner().size(), file.inner().last_modified()))
-                }),
-                Err(_) => Err(tr!("project_files.the_browser_could_not_read_this_project").into()),
+            if file.inner().size() > MAX_PROJECT_BYTES as f64 {
+                Err(tr!(
+                    "project_files.could_not_decompress_project",
+                    error = "project file exceeds 128 MiB limit"
+                ))
+            } else {
+                match wasm_bindgen_futures::JsFuture::from(file.inner().array_buffer()).await {
+                    Ok(buffer) => decode(&js_sys::Uint8Array::new(&buffer).to_vec()).map(|mut doc| {
+                        if let Some(link) = &mut doc.shared_project {
+                            link.file_updated_at = (file.inner().last_modified() / 1000.) as u64;
+                        }
+                        set_document_name(&mut doc, std::path::Path::new(&file.file_name()));
+                        Outcome::BrowserOpened(Box::new(doc), file.file_name(), format!("{}:{}:{}", file.file_name(), file.inner().size(), file.inner().last_modified()))
+                    }),
+                    Err(_) => Err(tr!("project_files.the_browser_could_not_read_this_project").into()),
+                }
             }
         } else {
             Ok(Outcome::Cancelled)
