@@ -36,10 +36,11 @@ constexpr const char* kMetaUnitsTag = "6D00";
 
 // Extract the model's unit-system string from a VFF file's meta/meta.dat
 // contents, or nullopt if the expected tags aren't found.
-std::optional<std::string> read_meta_units(const ByteBuffer& meta_bytes) {
+std::optional<std::string> read_meta_units(const ByteBuffer& meta_bytes, unsigned depth) {
+  if (depth > kMaxRecursionDepth) return std::nullopt;
   auto records = parse_flat(meta_bytes);
   for (auto& [tag, body] : records) {
-    if (tag == kMetaWrapperTag) return read_meta_units(body);
+    if (tag == kMetaWrapperTag) return read_meta_units(body, depth + 1);
   }
   for (auto& [tag, body] : records) {
     if (tag == kMetaUnitsTag) return std::string(body.begin(), body.end());

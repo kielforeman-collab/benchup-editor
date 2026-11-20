@@ -60,6 +60,9 @@ impl Mesh {
                     }
                     if pairs.insert(key) {
                         next += 1;
+                        if next > 1_000_000 {
+                            return Err(tr!("mesh_exchange.import_exceeds_one_million_entities").into());
+                        }
                         entities.push(next);
                         edges.insert(next, serde_json::json!({"id":next,"a":a,"b":b}));
                     }
@@ -173,6 +176,7 @@ fn stl(bytes: &[u8]) -> Result<Mesh, String> {
 }
 fn obj(text: &str) -> Result<Mesh, String> {
     let mut mesh = Mesh::default();
+    let mut total_indices = 0usize;
     for line in text.lines() {
         let words: Vec<_> = line
             .split('#')
@@ -197,6 +201,10 @@ fn obj(text: &str) -> Result<Mesh, String> {
             "f" | "l" => {
                 if words.len() > 4097 {
                     return Err(tr!("mesh_exchange.obj_polygon_exceeds_4096_vertices").into());
+                }
+                total_indices = total_indices.saturating_add(words.len() - 1);
+                if total_indices > 1_000_000 {
+                    return Err(tr!("mesh_exchange.import_exceeds_one_million_entities").into());
                 }
                 let mut ring = Vec::new();
                 for w in &words[1..] {

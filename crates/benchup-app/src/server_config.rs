@@ -115,6 +115,7 @@ pub fn configured_server() -> Result<String, ConfigError> {
                     .map_err(|_| ConfigError::InvalidUnicode)?,
             );
         }
+        #[cfg(debug_assertions)]
         if let Some(value) = read_dotenv(Path::new(".env"))? {
             return Ok(value);
         }

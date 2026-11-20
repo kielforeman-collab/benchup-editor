@@ -532,6 +532,18 @@ impl Model {
         self.validate_dimensions()?;
         self.validate_texts()?;
         self.validate_reference_images()?;
+        if self.stock_materials.len() > 10_000
+            || self
+                .stock_materials
+                .values()
+                .chain(self.objects.values().filter_map(|o| o.stock_material.as_ref()))
+                .any(|m| {
+                    m.name.len() > 1024
+                        || m.dimensions.iter().any(|&d| d == 0 || d > 10_000_000)
+                })
+        {
+            return Err("Invalid stock material.");
+        }
         if self
             .face_colors
             .keys()
@@ -655,6 +667,12 @@ impl Document {
         let doc = self;
         if doc.version != 1 && doc.version != 2 {
             return Err(tr!("core.document.unsupported_document_version").into());
+        }
+        if doc.name.len() > 1024 {
+            doc.name = doc.name.chars().take(1024).collect();
+        }
+        if doc.viewport_cameras.len() > 64 {
+            return Err(tr!("core.document.invalid_camera").into());
         }
         doc.model.validate().map_err(str::to_owned)?;
         if doc.version == 1 {

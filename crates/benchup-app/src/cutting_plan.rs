@@ -566,6 +566,9 @@ fn draw_layout(
         }
     }
     for (number, stock) in layout.stock.iter().enumerate() {
+        if stock.length == 0 || stock.width == 0 {
+            continue;
+        }
         let scale = (511. / stock.length as f64).min(320. / stock.width as f64);
         let width = if sheet {
             stock.length as f64 * scale

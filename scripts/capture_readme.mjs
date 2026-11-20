@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Node.js >= 22; no npm dependencies. Uses an existing Trunk dist directory.
 import { createServer } from 'node:http';
-import { readFile, writeFile, mkdtemp, rm, stat, access, rename, readdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdtemp, rm, stat, access, rename, readdir, realpath } from 'node:fs/promises';
 import { join, resolve, dirname, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -41,13 +41,16 @@ for (const candidate of candidates) { try { await access(candidate); executable 
 if (!executable) throw Error('Chromium not found. Set CHROME_BIN or pass --browser /path/to/chrome.');
 const profile = await mkdtemp(join(tmpdir(), 'benchup-readme-'));
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json' };
+const realDist = await realpath(dist);
 const server = createServer(async (req, res) => {
   try {
     const path = resolve(dist, '.' + decodeURIComponent(new URL(req.url, 'http://localhost').pathname));
     if (!path.startsWith(dist + sep) && path !== dist) throw Error('Invalid path');
     const file = (await stat(path)).isDirectory() ? join(path, 'index.html') : path;
-    res.setHeader('Content-Type', mime[extname(file)] || 'application/octet-stream');
-    res.end(await readFile(file));
+    const realFile = await realpath(file);
+    if (!realFile.startsWith(realDist + sep) && realFile !== realDist) throw Error('Invalid path');
+    res.setHeader('Content-Type', mime[extname(realFile)] || 'application/octet-stream');
+    res.end(await readFile(realFile));
   } catch { res.writeHead(404); res.end('Not found'); }
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));

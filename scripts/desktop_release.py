@@ -121,8 +121,9 @@ def package(platform, tag, pack_dir, output_dir):
                 if not all(config.get(key) for key in ("Endpoint", "CodeSigningAccountName", "CertificateProfileName")):
                     raise ValueError("WINDOWS_AZURE_SIGNING is missing required signing account fields.")
                 signing_file = Path(temporary) / "azure-signing.json"
-                signing_file.write_text(json.dumps(config), encoding="utf-8")
-                signing_file.chmod(0o600)
+                fd = os.open(signing_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(json.dumps(config))
                 args += ["--azureTrustedSignFile", str(signing_file)]
             elif signing_required():
                 raise ValueError("Windows signing is required but signing secrets are missing.")

@@ -155,7 +155,8 @@ function findZipOffset(data) {
 }
 var META_WRAPPER_TAG = [100, 0];
 var META_UNITS_TAG = [109, 0];
-function readMetaUnits(metaBytes) {
+function readMetaUnits(metaBytes, depth = 0) {
+  if (depth > MAX_TLV_RECURSION_DEPTH) return null;
   const view = new DataView(metaBytes.buffer, metaBytes.byteOffset, metaBytes.byteLength);
   let pos = 0;
   while (pos + 6 <= metaBytes.length) {
@@ -163,7 +164,7 @@ function readMetaUnits(metaBytes) {
     const size = view.getUint32(pos + 2, true);
     if (pos + 6 + size > metaBytes.length) break;
     if (tag[0] === META_WRAPPER_TAG[0] && tag[1] === META_WRAPPER_TAG[1]) {
-      return readMetaUnits(metaBytes.subarray(pos + 6, pos + 6 + size));
+      return readMetaUnits(metaBytes.subarray(pos + 6, pos + 6 + size), depth + 1);
     }
     if (tag[0] === META_UNITS_TAG[0] && tag[1] === META_UNITS_TAG[1]) {
       return new TextDecoder("utf-8").decode(metaBytes.subarray(pos + 6, pos + 6 + size));
@@ -172,9 +173,11 @@ function readMetaUnits(metaBytes) {
   }
   return null;
 }
-var MAX_UNCOMPRESSED_ENTRY_BYTES = 16 * 1024 * 1024 * 1024;
-var MAX_COMPRESSION_RATIO = 1e3;
-var RATIO_CHECK_THRESHOLD_BYTES = 1024 * 1024;
+var MAX_UNCOMPRESSED_ENTRY_BYTES = 256 * 1024 * 1024;
+var MAX_TOTAL_EXTRACTED_BYTES = 512 * 1024 * 1024;
+var MAX_COMPRESSION_RATIO = 200;
+var RATIO_CHECK_THRESHOLD_BYTES = 64 * 1024;
+var MAX_TLV_RECURSION_DEPTH = 128;
 function validateEntrySize(file) {
   const declared = file.originalSize;
   if (declared <= 0) return;
@@ -202,10 +205,17 @@ function extractSkpContents(data, options) {
   const version = readVersion(data, options);
   const zipOffset = findZipOffset(data);
   const zipBytes = data.subarray(zipOffset);
+  let totalUncompressed = 0;
   const wanted = (file) => {
     const lower = file.name.toLowerCase();
-    const isWanted = lower === "model.dat" || lower.endsWith("/model.dat") || lower === "meta/meta.dat" || lower.endsWith(".xml") || lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.includes("material");
-    if (isWanted) validateEntrySize(file);
+    const isWanted = lower === "model.dat" || lower.endsWith("/model.dat") || lower === "meta/meta.dat" || lower.endsWith(".xml") || lower.includes("material");
+    if (isWanted) {
+      validateEntrySize(file);
+      totalUncompressed += Math.max(0, file.originalSize || 0);
+      if (totalUncompressed > MAX_TOTAL_EXTRACTED_BYTES) {
+        throw new Error("ZIP archive exceeds cumulative extraction budget");
+      }
+    }
     return isWanted;
   };
   let unzipped;
@@ -313,6 +323,9 @@ function parseVarInt(data, offset, length) {
   return val;
 }
 function parseTlvRecursive(data, start, end, containerTags = CONTAINER_TAGS, depth = 0) {
+  if (depth > MAX_TLV_RECURSION_DEPTH) {
+    throw new Error("TLV recursion depth limit exceeded");
+  }
   let pos = start;
   const elements = [];
   while (pos <= end - 6) {
@@ -1156,6 +1169,7 @@ function decodeXmlEntities(value) {
   });
 }
 function parseMaterialXml(xmlText) {
+  if (xmlText.length > 256 * 1024) return null;
   const match = xmlText.match(/<(?:[a-zA-Z0-9_]+:)?material\b([^>]*)\/?>/);
   if (!match) return null;
   const attrsString = match[1];
@@ -1219,19 +1233,42 @@ function parseMaterialXml(xmlText) {
   };
 }
 function parseStyleXml(xmlText) {
+  if (xmlText.length > 256 * 1024) return null;
   const styleMatch = xmlText.match(/<(?:[a-zA-Z0-9_]+:)?style\b([^>]*)>/);
   if (!styleMatch) return null;
   const attrsString = styleMatch[1];
   const nameMatch = attrsString.match(/\bname\s*=\s*(?:"([^"]*)"|'([^']*)')/);
   const name = nameMatch ? nameMatch[1] !== void 0 ? nameMatch[1] : nameMatch[2] : "";
   const colors = {};
-  const itemRegex = /<(?:[a-zA-Z0-9_]+:)?item\s+id\s*=\s*(?:"(\d+)"|'(\d+)')[^>]*>([\s\S]*?)<\/(?:[a-zA-Z0-9_]+:)?item>/g;
-  let m;
-  while ((m = itemRegex.exec(xmlText)) !== null) {
-    const id = m[1] !== void 0 ? m[1] : m[2];
+  const lower = xmlText.toLowerCase();
+  let pos = 0;
+  while (pos < xmlText.length) {
+    const open = xmlText.indexOf("<", pos);
+    if (open < 0) break;
+    const gt = xmlText.indexOf(">", open + 1);
+    if (gt < 0) break;
+    const header = xmlText.slice(open + 1, gt);
+    const spaceIdx = header.search(/[\s/]/);
+    const rawTag = (spaceIdx < 0 ? header : header.slice(0, spaceIdx)).toLowerCase();
+    const tag = rawTag.includes(":") ? rawTag.slice(rawTag.indexOf(":") + 1) : rawTag;
+    if (tag !== "item" || header.endsWith("/")) {
+      pos = gt + 1;
+      continue;
+    }
+    const close = lower.indexOf("item>", gt + 1);
+    if (close < 0) break;
+    const closeLt = xmlText.lastIndexOf("</", close);
+    if (closeLt < gt + 1) {
+      pos = close + 5;
+      continue;
+    }
+    const idMatch = header.match(/\bid\s*=\s*(?:"(\d+)"|'(\d+)')/i);
+    const inner = xmlText.slice(gt + 1, closeLt);
+    pos = close + 5;
+    if (!idMatch) continue;
+    const id = idMatch[1] !== void 0 ? idMatch[1] : idMatch[2];
     if (id !== "4000" && id !== "4001") continue;
-    const inner = m[3];
-    const variantMatch = inner.match(/<(?:[a-zA-Z0-9_]+:)?variant\b[^>]*>(-?\d+)<\/(?:[a-zA-Z0-9_]+:)?variant>/);
+    const variantMatch = inner.match(/<(?:[a-zA-Z0-9_]+:)?variant\b[^>]*>(-?\d+)<\/(?:[a-zA-Z0-9_]+:)?variant>/i);
     if (!variantMatch) continue;
     const raw = parseInt(variantMatch[1], 10);
     if (Number.isNaN(raw)) continue;
@@ -2352,6 +2389,7 @@ var Archive = class {
     this.burnStack = [];
     // per-entity-list burned-item credits
     this.clineTail = null;
+    this.depth = 0;
     this.data = data;
     this.ver = ver;
     this.hasPid = ver >= 17;
@@ -2364,34 +2402,42 @@ var Archive = class {
     return s;
   }
   readObject(r, expect = null) {
-    const tag = r.u16();
-    if (tag === 0) {
-      return [null, null, null];
+    if (this.depth > MAX_TLV_RECURSION_DEPTH) {
+      throw new LegacyParseError(`recursion limit exceeded ${r.ctx()}`);
     }
-    if (tag === 32767) {
-      const big = r.u32();
-      if (big & 2147483648) {
-        return this.newOfClass(r, big & 2147483647, expect);
+    this.depth += 1;
+    try {
+      const tag = r.u16();
+      if (tag === 0) {
+        return [null, null, null];
       }
-      return this.backref(big, r);
-    }
-    if (tag === 65535) {
-      const schema = r.u16();
-      const namelen = r.u16();
-      if (namelen > 40) {
-        throw new LegacyParseError(`implausible class name length ${r.ctx()}`);
+      if (tag === 32767) {
+        const big = r.u32();
+        if (big & 2147483648) {
+          return this.newOfClass(r, big & 2147483647, expect);
+        }
+        return this.backref(big, r);
       }
-      const nameBytes = r.raw(namelen);
-      const name = new TextDecoder("utf-8").decode(nameBytes);
-      this.alloc(["class", name, schema]);
-      this.classSlot.set(name, this.nextSlot - 1);
-      this.classSchema.set(name, schema);
-      return this.newObj(r, name);
+      if (tag === 65535) {
+        const schema = r.u16();
+        const namelen = r.u16();
+        if (namelen > 40) {
+          throw new LegacyParseError(`implausible class name length ${r.ctx()}`);
+        }
+        const nameBytes = r.raw(namelen);
+        const name = new TextDecoder("utf-8").decode(nameBytes);
+        this.alloc(["class", name, schema]);
+        this.classSlot.set(name, this.nextSlot - 1);
+        this.classSchema.set(name, schema);
+        return this.newObj(r, name);
+      }
+      if (tag & 32768) {
+        return this.newOfClass(r, tag & 32767, expect);
+      }
+      return this.backref(tag, r);
+    } finally {
+      this.depth -= 1;
     }
-    if (tag & 32768) {
-      return this.newOfClass(r, tag & 32767, expect);
-    }
-    return this.backref(tag, r);
   }
   newOfClass(r, cslot, expect) {
     let ent = this.slots.get(cslot);
@@ -2619,7 +2665,10 @@ function readAttrNamed(ar, r) {
   preamble(ar, r);
   r.raw(4);
   const dictname = r.utf16();
-  function readTyped(t) {
+  function readTyped(t, depth = 0) {
+    if (depth > MAX_TLV_RECURSION_DEPTH) {
+      throw new LegacyParseError(`attribute recursion limit exceeded ${r.ctx()}`);
+    }
     if (t === 0) return null;
     if (t === 4) return r.i32();
     if (t === 6) return r.f64();
@@ -2633,7 +2682,7 @@ function readAttrNamed(ar, r) {
         throw new LegacyParseError(`implausible attr array count ${r.ctx()}`);
       }
       const arr = [];
-      for (let i = 0; i < n; i++) arr.push(readTyped(r.u8()));
+      for (let i = 0; i < n; i++) arr.push(readTyped(r.u8(), depth + 1));
       return arr;
     }
     if (t === 17) return r.f64s(3);
@@ -3350,17 +3399,23 @@ function addEdge(builder, slot, e, slots) {
     builder.edgeFlags.set(slot, flags);
   }
 }
-function fillBuilder(builder, ents, slots) {
+function fillBuilder(builder, ents, slots, budget = { coedges: 0 }) {
   for (const [s, , v] of ents) {
     if (v === null || typeof v !== "object") continue;
     const k = v.k;
     if (k === "edge") {
       addEdge(builder, s, v, slots);
     } else if (k === "face") {
+      if (!Array.isArray(v.plane) || v.plane.length < 3) continue;
       const loops = [];
-      for (const lp of v.loops) {
+      for (const lp of Array.isArray(v.loops) ? v.loops : []) {
+        if (!lp || !Array.isArray(lp.uses)) continue;
         const loop = [];
         for (const u of lp.uses) {
+          if (!u) continue;
+          if (++budget.coedges > 1e6) {
+            throw new Error("benchup.skp.model_too_large");
+          }
           const es = u.edge;
           const ent = slots.get(es);
           if (ent === void 0 || ent[2] === null) continue;
@@ -3730,13 +3785,17 @@ function parseDimensions(modelData, id2pos, instWorld) {
     }
     return local;
   }
-  while (true) {
+  const MAX_DIM_RECORD_BYTES = 64 * 1024;
+  let scannedBytes = 0;
+  while (i < n) {
     const j = findBytes2(modelData, needle, i);
     if (j < 0) break;
     i = j + 1;
     if (j + 6 > n) continue;
     const ln = readU32(modelData, j + 2);
-    if (ln < 40 || j + 6 + ln > n) continue;
+    if (ln < 40 || ln > MAX_DIM_RECORD_BYTES || ln > n - j - 6) continue;
+    scannedBytes += ln;
+    if (scannedBytes > n) break;
     const bodyBytes = modelData.subarray(j + 6, j + 6 + ln);
     const body = tlvItemsInt(bodyBytes);
     if (body === null) continue;
@@ -3761,6 +3820,7 @@ function parseDimensions(modelData, id2pos, instWorld) {
       offset: offB !== null && offB.length === 8 ? readF64(offB, 0) : 0,
       text: ""
     });
+    i = j + 6 + ln;
   }
   return dims;
 }

@@ -38,7 +38,7 @@ fn skp_error_message(error: &str) -> &str {
         "benchup.skp.worker_failed" => tr!("interchange.skp_worker_failed"),
         "benchup.skp.worker_message" => tr!("interchange.skp_worker_message"),
         "benchup.skp.incomplete_import" => tr!("interchange.skp_incomplete_import"),
-        _ => error,
+        _ => tr!("interchange.skp_incomplete_import"),
     }
 }
 

@@ -86,8 +86,12 @@ impl Socket {
                     stream
                         .set_write_timeout(Some(Duration::from_secs(10)))
                         .map_err(|e| e.to_string())?;
+                    let mut config = tungstenite::protocol::WebSocketConfig::default();
+                    config.max_message_size = Some(17 * 1024 * 1024);
+                    config.max_frame_size = Some(17 * 1024 * 1024);
                     let (mut socket, _) =
-                        tungstenite::client_tls(request, stream).map_err(|e| e.to_string())?;
+                        tungstenite::client_tls_with_config(request, stream, Some(config), None)
+                            .map_err(|e| e.to_string())?;
                     match socket.get_mut() {
                         MaybeTlsStream::Plain(s) => {
                             s.set_read_timeout(Some(Duration::from_millis(20)))
@@ -169,7 +173,7 @@ impl Socket {
                 ctx.request_repaint();
             }) as Box<dyn FnMut()>);
             let create = js_sys::Function::new_with_args(
-                tr!("realtime.url_ticket_connection_queue_wake"),
+                "url,ticket,connection,queue,wake",
                 r#"
                 const socket=new WebSocket(url);
                 const emit=v=>{queue.push(JSON.stringify(v));wake();};

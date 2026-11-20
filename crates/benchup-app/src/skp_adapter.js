@@ -6,7 +6,13 @@ function benchupImport(bytes) {
     const materials = new Map(source.materials.filter(m => m.id != null).map(m => [m.id, m.color]));
     const hiddenLayers = new Set(source.layers.filter(l => l.hidden).map(l => l.name));
     const active = new Set();
+    let steps = 0;
+    const charge = (count = 1) => {
+        steps += count;
+        if (steps > 1000000) throw new Error('benchup.skp.model_too_large');
+    };
     const allocate = () => {
+        charge();
         if (model.next_id >= 1000000) throw new Error('benchup.skp.model_too_large');
         return ++model.next_id;
     };
@@ -24,6 +30,7 @@ function benchupImport(bytes) {
         return p;
     };
     function visit(def, transforms, inheritedMaterial, depth) {
+        charge();
         if (depth > 64 || active.has(def.id)) throw new Error('benchup.skp.nested_components');
         active.add(def.id);
         const entities = [], vertices = new Map(), edges = new Map(), pairs = new Map();
@@ -32,6 +39,7 @@ function benchupImport(bytes) {
             vertices.set(v.id, id);
             model.vertices[id] = {id, position: point(v, transforms)};
         }
+        charge(def.edges.length);
         for (const e of def.edges) {
             const a = vertices.get(e.v1Id), b = vertices.get(e.v2Id);
             if (a === undefined || b === undefined) throw new Error('benchup.skp.missing_vertex');
@@ -48,16 +56,19 @@ function benchupImport(bytes) {
             edges.set(e.id, e);
         }
         for (const f of def.faces) {
-            const rings = f.loops.map(loop => loop.map((ce, i) => {
-                const e = edges.get(ce.edgeId);
-                if (!e) throw new Error('benchup.skp.missing_edge');
-                const next = edges.get(loop[(i + 1) % loop.length].edgeId);
-                const end = ce.orientation >= 0 ? e.v2Id : e.v1Id;
-                const start = ce.orientation >= 0 ? e.v1Id : e.v2Id;
-                const nextStart = next && (loop[(i + 1) % loop.length].orientation >= 0 ? next.v1Id : next.v2Id);
-                if (end !== nextStart) throw new Error('benchup.skp.disconnected_boundary');
-                return vertices.get(start);
-            }));
+            const rings = f.loops.map(loop => {
+                charge(loop.length);
+                return loop.map((ce, i) => {
+                    const e = edges.get(ce.edgeId);
+                    if (!e) throw new Error('benchup.skp.missing_edge');
+                    const next = edges.get(loop[(i + 1) % loop.length].edgeId);
+                    const end = ce.orientation >= 0 ? e.v2Id : e.v1Id;
+                    const start = ce.orientation >= 0 ? e.v1Id : e.v2Id;
+                    const nextStart = next && (loop[(i + 1) % loop.length].orientation >= 0 ? next.v1Id : next.v2Id);
+                    if (end !== nextStart) throw new Error('benchup.skp.disconnected_boundary');
+                    return vertices.get(start);
+                });
+            });
             if (!rings.length || rings.some(r => r.length < 3)) throw new Error('benchup.skp.invalid_boundary');
             const id = allocate();
             model.faces[id] = {id, vertices: rings[0], holes: rings.slice(1)};

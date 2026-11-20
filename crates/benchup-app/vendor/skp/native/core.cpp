@@ -19,6 +19,7 @@ namespace {
 struct Zip {
   mz_zip_archive z{};
   std::vector<std::string> names;
+  std::uint64_t total_extracted_bytes{};
 
   Zip(const ByteBuffer& d, std::size_t off) {
     if (!mz_zip_reader_init_mem(&z, d.data() + off, d.size() - off, 0))
@@ -40,6 +41,11 @@ struct Zip {
     mz_zip_archive_file_stat s{};
     if (!mz_zip_reader_file_stat(&z, i, &s)) return {};
     validate_entry_size(s);
+    if (s.m_uncomp_size > kMaxTotalExtractedBytes - total_extracted_bytes) {
+      throw SkpParseError("ZIP archive exceeds cumulative extraction budget",
+                          ParseStage::zip_extract);
+    }
+    total_extracted_bytes += s.m_uncomp_size;
     ByteBuffer b(static_cast<std::size_t>(s.m_uncomp_size));
     if (!mz_zip_reader_extract_to_mem(&z, i, b.data(), b.size(), 0)) return {};
     return b;
@@ -55,9 +61,10 @@ struct Zip {
   // observed at ~10x compression, so both limits below leave generous
   // headroom for legitimate files while rejecting the kind of declared-size
   // lie or extreme ratio a genuine file would never need.
-  static constexpr std::uint64_t kMaxUncompressedEntryBytes = 16ull * 1024 * 1024 * 1024;  // 16 GB
-  static constexpr std::uint64_t kMaxCompressionRatio = 1000;
-  static constexpr std::uint64_t kRatioCheckThresholdBytes = 1024ull * 1024;  // 1 MB
+  static constexpr std::uint64_t kMaxUncompressedEntryBytes = 256ull * 1024 * 1024;  // 256 MB
+  static constexpr std::uint64_t kMaxTotalExtractedBytes = 512ull * 1024 * 1024;     // 512 MB
+  static constexpr std::uint64_t kMaxCompressionRatio = 200;
+  static constexpr std::uint64_t kRatioCheckThresholdBytes = 64ull * 1024;  // 64 KB
 
   static void validate_entry_size(const mz_zip_archive_file_stat& s) {
     auto declared = s.m_uncomp_size;
@@ -115,6 +122,8 @@ std::vector<Header> headers(const ByteBuffer& d, std::size_t start, std::size_t 
 
 std::string str(const ByteBuffer& b) { return {reinterpret_cast<const char*>(b.data()), b.size()}; }
 
+static constexpr std::size_t kMaxXmlBytes = 256 * 1024;
+
 // Decodes the 5 predefined XML entities plus numeric character references
 // (&#39;, &#x27;) in a raw attribute value extracted by regex rather than a
 // real XML parser. A real material name legitimately contains "<"/">" -
@@ -125,9 +134,43 @@ std::string str(const ByteBuffer& b) { return {reinterpret_cast<const char*>(b.d
 // sequential replacements: sequential replacement would double-decode
 // "&amp;lt;" into "<" instead of the correct "&lt;".
 std::string attr(const std::string& s, const std::string& key) {
-  std::regex r("(?:^|\\s)" + key + "\\s*=\\s*[\\\"']([^\\\"']*)[\\\"']", std::regex::icase);
-  std::smatch m;
-  return std::regex_search(s, m, r) ? decode_xml_entities(m[1].str()) : "";
+  if (s.size() > kMaxXmlBytes || key.empty()) return "";
+  std::size_t i = 0;
+  const std::size_t n = s.size();
+  while (i < n) {
+    while (i < n && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    std::size_t name_start = i;
+    while (i < n && !std::isspace(static_cast<unsigned char>(s[i])) && s[i] != '=' && s[i] != '/' &&
+           s[i] != '>')
+      ++i;
+    std::size_t name_len = i - name_start;
+    while (i < n && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    if (i >= n || s[i] != '=') {
+      if (i == name_start) ++i;
+      continue;
+    }
+    ++i;
+    while (i < n && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    if (i >= n || (s[i] != '"' && s[i] != '\'')) continue;
+    char quote = s[i++];
+    std::size_t val_start = i;
+    while (i < n && s[i] != quote) ++i;
+    if (i >= n) break;
+    std::size_t val_len = i - val_start;
+    ++i;
+    if (name_len == key.size()) {
+      bool match = true;
+      for (std::size_t j = 0; j < name_len; ++j) {
+        if (std::tolower(static_cast<unsigned char>(s[name_start + j])) !=
+            std::tolower(static_cast<unsigned char>(key[j]))) {
+          match = false;
+          break;
+        }
+      }
+      if (match) return decode_xml_entities(s.substr(val_start, val_len));
+    }
+  }
+  return "";
 }
 
 int integer(const std::string& s, int fallback) {
@@ -153,8 +196,10 @@ std::string basename(const std::string& s) {
 
 std::shared_ptr<RawMaterial> material_xml(Zip& zip, const std::string& path,
                                           const ByteBuffer& bytes) {
+  (void)zip;
+  if (bytes.size() > kMaxXmlBytes) return {};
   auto xml = str(bytes);
-  std::regex tag("<(?:[A-Za-z_][\\w.-]*:)?material\\b([^>]*)>", std::regex::icase);
+  static const std::regex tag("<(?:[A-Za-z_][\\w.-]*:)?material\\b([^>]*)>", std::regex::icase);
   std::smatch m;
   if (!std::regex_search(xml, m, tag)) return {};
   auto a = m[1].str();
@@ -168,7 +213,7 @@ std::shared_ptr<RawMaterial> material_xml(Zip& zip, const std::string& path,
     out->transparency = std::clamp(1.0 - number(attr(a, "trans"), 0), 0.0, 1.0);
   out->colorized = attr(a, "type") == "2";
   out->colorize_type = integer(attr(a, "colorizeType"), 0);
-  std::regex tr("<(?:[A-Za-z_][\\w.-]*:)?texture\\b([^>]*)>", std::regex::icase);
+  static const std::regex tr("<(?:[A-Za-z_][\\w.-]*:)?texture\\b([^>]*)>", std::regex::icase);
   if (std::regex_search(xml, m, tr)) {
     auto ta = m[1].str();
     RawTexture t;
@@ -177,27 +222,13 @@ std::shared_ptr<RawMaterial> material_xml(Zip& zip, const std::string& path,
     t.y_scale = number(attr(ta, "yScale"), 0);
     auto slash = path.find_last_of('/');
     auto folder = slash == std::string::npos ? std::string{} : path.substr(0, slash);
-    auto candidate = folder + "/" + t.filename;
-    if (!t.filename.empty()) t.data = zip.get(candidate);
-    if (!t.data)
+    if (t.filename.empty()) {
       for (auto& n : zip.names)
         if (n.rfind(folder + "/", 0) == 0 && n != path && n.size() > 4 &&
             n.substr(n.size() - 4) != ".xml") {
-          t.data = zip.get(n);
-          if (t.filename.empty()) t.filename = basename(n);
+          t.filename = basename(n);
           break;
         }
-    if (!t.data) {
-      std::regex ir("<(?:[A-Za-z_][\\w.-]*:)?image\\b([^>]*)", std::regex::icase);
-      if (std::regex_search(xml, m, ir)) {
-        auto ip = attr(m[1].str(), "path");
-        while (!ip.empty() && (ip[0] == '.' || ip[0] == '/')) ip.erase(ip.begin());
-        for (auto& c : {ip, folder + "/" + ip})
-          if (!c.empty() && (t.data = zip.get(c))) {
-            if (t.filename.empty()) t.filename = basename(c);
-            break;
-          }
-      }
     }
     out->texture = std::move(t);
   }
@@ -207,31 +238,99 @@ std::shared_ptr<RawMaterial> material_xml(Zip& zip, const std::string& path,
 // Every `name="value"` attribute of a tag's attribute text, entity-decoded.
 std::map<std::string, std::string> attributes(const std::string& s) {
   std::map<std::string, std::string> out;
-  std::regex r("([A-Za-z_][\\w.:-]*)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')");
-  for (auto i = std::sregex_iterator(s.begin(), s.end(), r); i != std::sregex_iterator(); ++i)
-    out[(*i)[1].str()] = decode_xml_entities((*i)[2].matched ? (*i)[2].str() : (*i)[3].str());
+  if (s.size() > kMaxXmlBytes) return out;
+  std::size_t i = 0;
+  const std::size_t n = s.size();
+  while (i < n) {
+    while (i < n && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    std::size_t name_start = i;
+    while (i < n && !std::isspace(static_cast<unsigned char>(s[i])) && s[i] != '=' && s[i] != '/' &&
+           s[i] != '>')
+      ++i;
+    std::size_t name_len = i - name_start;
+    while (i < n && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    if (i >= n || s[i] != '=') {
+      if (i == name_start) ++i;
+      continue;
+    }
+    ++i;
+    while (i < n && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    if (i >= n || (s[i] != '"' && s[i] != '\'')) continue;
+    char quote = s[i++];
+    std::size_t val_start = i;
+    while (i < n && s[i] != quote) ++i;
+    if (i >= n) break;
+    std::size_t val_len = i - val_start;
+    ++i;
+    if (name_len > 0)
+      out[s.substr(name_start, name_len)] = decode_xml_entities(s.substr(val_start, val_len));
+  }
   return out;
+}
+
+std::size_t find_ci(const std::string& haystack, const char* needle, std::size_t pos) {
+  const std::size_t nlen = std::strlen(needle);
+  if (nlen == 0 || pos >= haystack.size() || nlen > haystack.size() - pos) return std::string::npos;
+  for (std::size_t i = pos; i + nlen <= haystack.size(); ++i) {
+    bool match = true;
+    for (std::size_t j = 0; j < nlen; ++j) {
+      if (std::tolower(static_cast<unsigned char>(haystack[i + j])) !=
+          std::tolower(static_cast<unsigned char>(needle[j]))) {
+        match = false;
+        break;
+      }
+    }
+    if (match) return i;
+  }
+  return std::string::npos;
 }
 
 // Watermarks of style.xml item 5001: `<screenimage>` entries, each naming its
 // image inside the SKP ZIP. Image bytes are filled in by the caller.
 std::vector<StyleWatermark> style_watermarks(const std::string& wmlist) {
   std::vector<StyleWatermark> out;
-  std::regex si(
-      "<(?:[A-Za-z_][\\w.-]*:)?screenimage\\b([^>]*?)(?:/>|>([\\s\\S]*?)"
-      "</(?:[A-Za-z_][\\w.-]*:)?screenimage>)",
-      std::regex::icase);
+  if (wmlist.size() > kMaxXmlBytes) return out;
   std::regex im("<(?:[A-Za-z_][\\w.-]*:)?image\\b([^>]*)>", std::regex::icase);
-  for (auto i = std::sregex_iterator(wmlist.begin(), wmlist.end(), si); i != std::sregex_iterator();
-       ++i) {
+  std::size_t pos = 0;
+  while (pos < wmlist.size()) {
+    auto open = wmlist.find('<', pos);
+    if (open == std::string::npos) break;
+    auto gt = wmlist.find('>', open + 1);
+    if (gt == std::string::npos) break;
+    auto header = wmlist.substr(open + 1, gt - open - 1);
+    auto colon = header.find(':');
+    auto space = header.find_first_of(" \t\r\n/");
+    auto tag_start = (colon != std::string::npos && (space == std::string::npos || colon < space))
+                         ? colon + 1
+                         : 0;
+    auto tag_len = (space == std::string::npos ? header.size() : space) - tag_start;
+    std::string tag_name = header.substr(tag_start, tag_len);
+    for (auto& ch : tag_name) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    if (tag_name != "screenimage") {
+      pos = gt + 1;
+      continue;
+    }
+    bool self_closing = !header.empty() && header.back() == '/';
+    auto attr_text =
+        space == std::string::npos ? std::string{} : header.substr(space, header.size() - space - (self_closing ? 1 : 0));
+    std::string body;
+    if (self_closing) {
+      pos = gt + 1;
+    } else {
+      auto close = find_ci(wmlist, "screenimage>", gt + 1);
+      if (close == std::string::npos) break;
+      auto close_lt = wmlist.rfind("</", close);
+      if (close_lt != std::string::npos && close_lt >= gt + 1)
+        body = wmlist.substr(gt + 1, close_lt - (gt + 1));
+      pos = close + 12;
+    }
     StyleWatermark w;
-    w.attributes = attributes((*i)[1].str());
+    w.attributes = attributes(attr_text);
     w.attributes.erase("name");
-    w.name = attr((*i)[1].str(), "name");
+    w.name = attr(attr_text, "name");
     if (w.name == "<MODEL SPACE>") continue;  // separator between under- and overlays
-    auto body = (*i)[2].str();
     std::smatch m;
-    if (std::regex_search(body, m, im)) {
+    if (!body.empty() && std::regex_search(body, m, im)) {
       w.image_path = attr(m[1].str(), "path");
       w.file_name = attr(m[1].str(), "file_name");
     }
@@ -241,6 +340,7 @@ std::vector<StyleWatermark> style_watermarks(const std::string& wmlist) {
 }
 
 std::optional<RawStyle> style_xml(const ByteBuffer& bytes) {
+  if (bytes.size() > kMaxXmlBytes) return {};
   auto xml = str(bytes);
   std::regex st("<(?:[A-Za-z_][\\w.-]*:)?style\\b([^>]*)>", std::regex::icase);
   std::smatch m;
@@ -248,38 +348,78 @@ std::optional<RawStyle> style_xml(const ByteBuffer& bytes) {
   RawStyle o;
   o.name = attr(m[1].str(), "name");
   o.description = attr(m[1].str(), "desc");
-  std::regex item(
-      "<(?:[A-Za-z_][\\w.-]*:)?item\\b([^>]*)>([\\s\\S]*?)</(?:[A-Za-z_][\\w.-]*:)?item>",
-      std::regex::icase);
-  std::regex vr(
-      "<(?:[A-Za-z_][\\w.-]*:)?variant\\b([^>]*)>([\\s\\S]*?)</(?:[A-Za-z_][\\w.-]*:)?variant>",
-      std::regex::icase);
-  for (auto i = std::sregex_iterator(xml.begin(), xml.end(), item); i != std::sregex_iterator();
-       ++i) {
-    auto id = integer(attr((*i)[1].str(), "id"), -1);
-    if (id < 0) continue;
-    std::smatch v;
-    auto body = (*i)[2].str();
-    if (!std::regex_search(body, v, vr)) continue;
-    StyleItem it;
-    it.type = integer(attr(v[1].str(), "type"), 0);
-    it.value = v[2].str();
-    auto first = it.value.find_first_not_of(" \t\r\n");
-    auto last = it.value.find_last_not_of(" \t\r\n");
-    it.value =
-        first == std::string::npos ? std::string{} : it.value.substr(first, last - first + 1);
-    // Faces: 2002 front, 2003 back, as signed-int32 ABGR (R in the low byte);
-    // variant type 4 in current SketchUp, 5 in older files.
-    // The 4000-series items are background/sky/ground, not face colors.
-    if (id == 2002 || id == 2003) {
-      try {
-        auto n = static_cast<std::uint32_t>(std::stoll(it.value));
-        Color3 c{std::uint8_t(n), std::uint8_t(n >> 8), std::uint8_t(n >> 16)};
-        (id == 2002 ? o.front_color : o.back_color) = c;
-      } catch (...) {
-      }
+  std::size_t pos = 0;
+  while (pos < xml.size()) {
+    auto open = xml.find('<', pos);
+    if (open == std::string::npos) break;
+    auto gt = xml.find('>', open + 1);
+    if (gt == std::string::npos) break;
+    auto header = xml.substr(open + 1, gt - open - 1);
+    auto colon = header.find(':');
+    auto space = header.find_first_of(" \t\r\n/");
+    auto tag_start = (colon != std::string::npos && (space == std::string::npos || colon < space))
+                         ? colon + 1
+                         : 0;
+    auto tag_len = (space == std::string::npos ? header.size() : space) - tag_start;
+    std::string tag_name = header.substr(tag_start, tag_len);
+    for (auto& ch : tag_name) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    if (tag_name != "item" || (!header.empty() && header.back() == '/')) {
+      pos = gt + 1;
+      continue;
     }
-    o.items[id] = std::move(it);
+    auto close = find_ci(xml, "item>", gt + 1);
+    if (close == std::string::npos) break;
+    auto close_lt = xml.rfind("</", close);
+    if (close_lt == std::string::npos || close_lt < gt + 1) {
+      pos = close + 5;
+      continue;
+    }
+    auto item_attrs = space == std::string::npos ? std::string{} : header.substr(space);
+    auto body = xml.substr(gt + 1, close_lt - (gt + 1));
+    pos = close + 5;
+    auto id = integer(attr(item_attrs, "id"), -1);
+    if (id < 0) continue;
+    auto v_open = body.find('<');
+    while (v_open != std::string::npos) {
+      auto v_gt = body.find('>', v_open + 1);
+      if (v_gt == std::string::npos) break;
+      auto v_hdr = body.substr(v_open + 1, v_gt - v_open - 1);
+      auto v_colon = v_hdr.find(':');
+      auto v_space = v_hdr.find_first_of(" \t\r\n/");
+      auto v_tstart = (v_colon != std::string::npos && (v_space == std::string::npos || v_colon < v_space))
+                          ? v_colon + 1
+                          : 0;
+      auto v_tlen = (v_space == std::string::npos ? v_hdr.size() : v_space) - v_tstart;
+      std::string v_tag = v_hdr.substr(v_tstart, v_tlen);
+      for (auto& ch : v_tag) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+      if (v_tag == "variant" && (v_hdr.empty() || v_hdr.back() != '/')) {
+        auto v_close = find_ci(body, "variant>", v_gt + 1);
+        if (v_close != std::string::npos) {
+          auto v_close_lt = body.rfind("</", v_close);
+          if (v_close_lt != std::string::npos && v_close_lt >= v_gt + 1) {
+            auto v_attrs = v_space == std::string::npos ? std::string{} : v_hdr.substr(v_space);
+            StyleItem it;
+            it.type = integer(attr(v_attrs, "type"), 0);
+            it.value = body.substr(v_gt + 1, v_close_lt - (v_gt + 1));
+            auto first = it.value.find_first_not_of(" \t\r\n");
+            auto last = it.value.find_last_not_of(" \t\r\n");
+            it.value = first == std::string::npos ? std::string{}
+                                                  : it.value.substr(first, last - first + 1);
+            if (id == 2002 || id == 2003) {
+              try {
+                auto n = static_cast<std::uint32_t>(std::stoll(it.value));
+                Color3 c{std::uint8_t(n), std::uint8_t(n >> 8), std::uint8_t(n >> 16)};
+                (id == 2002 ? o.front_color : o.back_color) = c;
+              } catch (...) {
+              }
+            }
+            o.items[id] = std::move(it);
+          }
+        }
+        break;
+      }
+      v_open = body.find('<', v_gt + 1);
+    }
   }
   if (auto wm = o.items.find(5001); wm != o.items.end())
     o.watermarks = style_watermarks(wm->second.value);
@@ -402,9 +542,10 @@ std::string decode_xml_entities(const std::string& value) {
         const bool hex = name.size() > 1 && (name[1] == 'x' || name[1] == 'X');
         const unsigned long codePoint =
             std::stoul(name.substr(hex ? 2 : 1), nullptr, hex ? 16 : 10);
-        // UTF-8 encode. SketchUp material/style names are practically
-        // always within the BMP, but handle the full range regardless.
-        if (codePoint <= 0x7F) {
+        if (codePoint == 0 || codePoint > 0x10FFFF ||
+            (codePoint >= 0xD800 && codePoint <= 0xDFFF)) {
+          out += m[0].str();
+        } else if (codePoint <= 0x7F) {
           out += static_cast<char>(codePoint);
         } else if (codePoint <= 0x7FF) {
           out += static_cast<char>(0xC0 | (codePoint >> 6));
@@ -445,9 +586,13 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   if (off == std::string::npos)
     throw SkpParseError("No ZIP container found", ParseStage::zip_extract);
   Zip zip(data, off);
-  for (auto& n : zip.names)
+  std::size_t xml_count = 0;
+  static constexpr std::size_t kMaxXmlEntries = 4096;
+  for (auto& n : zip.names) {
+    if (xml_count >= kMaxXmlEntries) break;
     if (n.rfind("materials/", 0) == 0 && n.size() >= 12 &&
         n.substr(n.size() - 12) == "material.xml") {
+      ++xml_count;
       if (auto b = zip.get(n))
         if (auto m = material_xml(zip, n, *b)) {
           auto slash = n.find('/', 10);
@@ -463,23 +608,18 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
           }
         }
     }
-  for (auto& n : zip.names)
-    if (n.rfind("styles/", 0) == 0 && n.size() >= 9 && n.substr(n.size() - 9) == "style.xml")
+  }
+  for (auto& n : zip.names) {
+    if (xml_count >= kMaxXmlEntries) break;
+    if (n.rfind("styles/", 0) == 0 && n.size() >= 9 && n.substr(n.size() - 9) == "style.xml") {
+      ++xml_count;
       if (auto b = zip.get(n))
         if (auto s = style_xml(*b)) {
           if (n.size() > 17) s->folder = n.substr(7, n.size() - 17);  // styles/<folder>/style.xml
-          // A style's own images sit in its folder ("./2.jpg"); the current style's
-          // watermark images are at the ZIP root ("watermarks/Watermark1.jpg").
-          for (auto& w : s->watermarks) {
-            auto path = w.image_path;
-            while (path.rfind("./", 0) == 0) path.erase(0, 2);
-            while (!path.empty() && path[0] == '/') path.erase(0, 1);
-            if (path.empty()) continue;
-            for (const auto& candidate : {"styles/" + s->folder + "/" + path, path})
-              if ((w.image = zip.get(candidate))) break;
-          }
           p.styles.push_back(std::move(*s));
         }
+    }
+  }
   auto model = zip.get("model.dat");
   if (!model) throw SkpParseError("model.dat not found in ZIP container", ParseStage::zip_extract);
   auto hs = headers(*model, 0, model->size());

@@ -19,10 +19,17 @@ struct Import {
   std::set<std::string> hidden_layers;
   std::set<EntityId> active;
   Id next=0;
+  Id steps=0;
   explicit Import(const SkpModel& model):source(model), materials(model.materials_by_id()) {
     for (const auto& layer:model.layers) if(layer.hidden) hidden_layers.insert(layer.name);
   }
+  void charge(std::size_t count = 1) {
+    if(count > 1000000 || steps > 1000000 - static_cast<Id>(count))
+      throw std::runtime_error("benchup.skp.model_too_large");
+    steps += static_cast<Id>(count);
+  }
   Id allocate() {
+    charge();
     if(next>=1000000) throw std::runtime_error("benchup.skp.model_too_large");
     return ++next;
   }
@@ -36,6 +43,7 @@ struct Import {
   }
   std::vector<Id> visit(const Definition& def, const std::vector<std::vector<double>>& transforms,
       std::optional<EntityId> inherited, unsigned depth) {
+    charge();
     if(depth>64 || !active.insert(def.id).second) throw std::runtime_error("benchup.skp.nested_components");
     std::vector<Id> entities;
     std::map<EntityId,Id> remap;
@@ -63,6 +71,7 @@ struct Import {
       auto out=Json::make_object();out.set("id",id);out.set("position",std::move(position));
       vertices.set(std::to_string(id),std::move(out));
     }
+    charge(def.edges.size());
     for(const auto& [old,e]:def.edges) {
       if(!remap.count(e.v1_id) || !remap.count(e.v2_id)) throw std::runtime_error("benchup.skp.missing_vertex");
       const auto a=remap.at(e.v1_id), b=remap.at(e.v2_id);
@@ -77,6 +86,7 @@ struct Import {
       std::vector<std::vector<Id>> rings;
       for(const auto& loop:f.loops) {
         if(loop.size()<3) throw std::runtime_error("benchup.skp.invalid_boundary");
+        charge(loop.size());
         std::vector<Id> ring;
         for(std::size_t i=0;i<loop.size();++i) {
           const auto& ce=loop[i];const auto& ne=loop[(i+1)%loop.size()];
@@ -134,7 +144,9 @@ char* copy(const std::string& value) {
 }
 }
 extern "C" char* benchup_skp_parse(const unsigned char* bytes, std::size_t size, int* success) noexcept {
+  if(!success) return nullptr;
   *success=0;
+  if(!bytes && size>0) return copy("benchup.skp.incomplete_import");
   try {
     openskp::ByteBuffer input(bytes,bytes+size);
     auto model=openskp::build_model(openskp::full_parse(input,{}),{});

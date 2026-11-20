@@ -5,10 +5,15 @@ return new Promise((resolve, reject) => {
         catch (error) { postMessage({error: error.message || String(error)}); }
     };`;
     const url = URL.createObjectURL(new Blob([body], {type: 'text/javascript'}));
-    let worker;
-    const cleanup = () => { if (worker) worker.terminate(); URL.revokeObjectURL(url); };
+    let worker, timer;
+    const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        if (worker) worker.terminate();
+        URL.revokeObjectURL(url);
+    };
     try {
         worker = new Worker(url);
+        timer = setTimeout(() => { cleanup(); reject(new Error('benchup.skp.worker_failed')); }, 60000);
         worker.onmessage = event => {
             cleanup();
             if (event.data.error) reject(new Error(event.data.error));
