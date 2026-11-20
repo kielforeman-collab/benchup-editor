@@ -58,7 +58,27 @@ jobs:
 
       - name: Extract released browser app
         if: github.event_name == 'workflow_run'
-        run: python3 -m zipfile -e dist/release-wasm/benchup-v*-wasm.zip dist/site/play
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+
+          archives = sorted(Path("dist/release-wasm").glob("benchup-v*-wasm.zip"))
+          if len(archives) != 1:
+              raise SystemExit(f"Expected 1 WASM archive, found {len(archives)}")
+          dest = Path("dist/site/play").resolve()
+          dest.mkdir(parents=True, exist_ok=True)
+          total = 0
+          with zipfile.ZipFile(archives[0]) as zf:
+              for info in zf.infolist():
+                  target = (dest / info.filename).resolve()
+                  if dest != target and dest not in target.parents:
+                      raise SystemExit(f"Unsafe zip member path: {info.filename}")
+                  total += info.file_size
+                  if total > 256 * 1024 * 1024:
+                      raise SystemExit("Archive exceeds 256 MiB uncompressed limit")
+              zf.extractall(dest)
+          PY
 
       - name: Install Rust and WebAssembly target
         if: github.event_name == 'workflow_dispatch'

@@ -159,13 +159,17 @@ pub fn open(ctx: &eframe::egui::Context) -> Pending {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn read_project(path: PathBuf) -> Result<Outcome, String> {
-        if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > MAX_PROJECT_BYTES as u64 {
+        let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+        let mut bytes = Vec::new();
+        file.take((MAX_PROJECT_BYTES as u64) + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > MAX_PROJECT_BYTES {
             return Err(tr!(
                 "project_files.could_not_decompress_project",
                 error = "project file exceeds 128 MiB limit"
             ));
         }
-        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
         decode(&bytes).map(|mut doc| {
             if let Some(link) = &mut doc.shared_project {
                 if let Ok(modified) = std::fs::metadata(&path).and_then(|m| m.modified()) {

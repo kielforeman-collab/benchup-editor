@@ -299,7 +299,11 @@ impl BenchUpApp {
                 .pick_file()
                 .await
             {
-                decode_image(file.file_name(), &file.read().await, &preferences).map(Some)
+                if file.inner().size() > (32 * 1024 * 1024) as f64 {
+                    Err("Choose an image smaller than 32 MB.".into())
+                } else {
+                    decode_image(file.file_name(), &file.read().await, &preferences).map(Some)
+                }
             } else {
                 Ok(None)
             };

@@ -16,7 +16,7 @@ if(!project)throw Error(usage);
 const mode=option('--mode','orbit');
 if(!['orbit','sun','select','box-select','groups','draw-line','draw-rectangle','measure-tape','walk','scale','erase-edge','erase-face','erase-object'].includes(mode))throw Error('--mode must be orbit, sun, select, groups, draw-line, draw-rectangle, measure-tape, walk, or erase-edge');
 const projectBytes=await readFile(project);
-const model=(projectBytes[0]===0x1f&&projectBytes[1]===0x8b?gunzipSync(projectBytes):projectBytes).toString('utf8');
+const model=(projectBytes[0]===0x1f&&projectBytes[1]===0x8b?gunzipSync(projectBytes,{maxOutputLength:128*1024*1024}):projectBytes).toString('utf8');
 const projectData=JSON.parse(model);
 const scope=option('--scope',mode.startsWith('erase-')?'leaf':'root');
 if(!['root','group','leaf'].includes(scope))throw Error('--scope must be root, group, or leaf');

@@ -52,6 +52,8 @@ def main():
         )
         run("security", "set-key-partition-list", "-S", "apple-tool:,apple:", "-s", "-k", password, str(keychain))
         run("xcrun", "notarytool", "store-credentials", "benchup-notary", "--apple-id", values[4], "--team-id", values[5], "--password", values[6], "--keychain", str(keychain))
+        if "\n" in str(keychain) or "\r" in str(keychain):
+            raise SystemExit("RUNNER_TEMP contains an invalid newline character.")
         with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as output:
             output.write(f"BENCHUP_MACOS_KEYCHAIN={keychain}\nBENCHUP_MACOS_NOTARY_PROFILE=benchup-notary\n")
     finally:

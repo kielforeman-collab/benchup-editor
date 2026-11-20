@@ -524,7 +524,8 @@ fn valid_server(server: &str) -> bool {
     let authority = server
         .split_once("://")
         .map(|(_, rest)| rest.split('/').next().unwrap_or(""));
-    !server.contains(['?', '#', '@'])
+    !server.contains(['?', '#', '@', '\\'])
+        && !server.chars().any(|c| c.is_control() || c.is_whitespace())
         && (server.starts_with("https://") && authority.is_some_and(|a| !a.is_empty())
             || server.starts_with("http://")
                 && authority.is_some_and(|a| {
@@ -561,7 +562,12 @@ fn save_credential(server: &str, token: &str) -> Result<(), String> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options.open(path).map_err(|e| e.to_string())?;
+    let mut file = options.open(&path).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+    }
     file.write_all(token.as_bytes()).map_err(|e| e.to_string())
 }
 fn request(
@@ -572,7 +578,14 @@ fn request(
     csrf: Option<String>,
 ) -> Receiver<Result<Vec<u8>, String>> {
     let (sender, receiver) = mpsc::channel();
-    if !(url.starts_with("https://") || valid_server(&url)) {
+    let safe_https = url.starts_with("https://")
+        && !url.contains(['@', '#', '\\'])
+        && !url.chars().any(|c| c.is_control() || c.is_whitespace())
+        && url
+            .strip_prefix("https://")
+            .and_then(|rest| rest.split('/').next())
+            .is_some_and(|a| !a.is_empty());
+    if !(safe_https || valid_server(&url)) {
         let _ = sender.send(Err(tr!("account.invalid_server_address").into()));
         return receiver;
     }

@@ -14,7 +14,7 @@ def synchronize(path: Path, repository: str, base_url: str | None = None) -> Non
     from urllib.parse import urlsplit
     parsed = urlsplit(base_url)
     if (parsed.scheme != "https" or not parsed.hostname or parsed.query or parsed.fragment
-            or parsed.username or parsed.password or any(c.isspace() or c in '<>"\\' for c in base_url)):
+            or parsed.username or parsed.password or any(c.isspace() or c in '<>"\\()' for c in base_url)):
         raise ValueError("Pages URL must be HTTPS without credentials, query, or fragment")
     base_url = base_url.rstrip("/") + "/"
     text = path.read_text()
