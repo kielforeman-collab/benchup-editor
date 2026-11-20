@@ -647,9 +647,20 @@ impl BenchUpApp {
         storage: Option<&dyn eframe::Storage>,
     ) {
         self.inspector_order = restore_order(storage);
-        let mut preferences = storage
-            .and_then(|storage| crate::identity::preference_value::<InspectorPreferences>(storage, PREFERENCE_KEY))
-            .unwrap_or_default();
+        let mut preferences = if let Some(storage) = storage {
+            if let Some(parsed) =
+                crate::identity::preference_value::<InspectorPreferences>(storage, PREFERENCE_KEY)
+            {
+                self.unreadable_preferences_backup = None;
+                parsed
+            } else {
+                self.unreadable_preferences_backup = storage.get_string(PREFERENCE_KEY);
+                InspectorPreferences::default()
+            }
+        } else {
+            self.unreadable_preferences_backup = None;
+            InspectorPreferences::default()
+        };
         self.inspector_layout =
             InspectorLayout::restore(preferences.docking.as_ref(), &self.inspector_order);
         self.inspector_order = self.inspector_layout.order();
@@ -826,12 +837,10 @@ impl BenchUpApp {
         }
     }
 
-    pub(super) fn save_inspector_preferences(&self, storage: &mut dyn eframe::Storage) {
-        // Preserve unreadable settings before saving defaults over them. A
-        // future migration failure must not destroy the user's catalogs.
-        if let Some(raw) = storage.get_string(PREFERENCE_KEY)
-            && crate::identity::preference_value::<InspectorPreferences>(storage, PREFERENCE_KEY).is_none()
-        {
+    pub(super) fn save_inspector_preferences(&mut self, storage: &mut dyn eframe::Storage) {
+        // Preserve unreadable settings captured on startup before saving defaults
+        // over them. A future migration failure must not destroy the user's catalogs.
+        if let Some(raw) = self.unreadable_preferences_backup.take() {
             storage.set_string("benchup.inspector.unreadable-backup.v1", raw);
         }
         eframe::set_value(storage, PREFERENCE_KEY, &self.inspector_preferences);

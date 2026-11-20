@@ -869,7 +869,7 @@ impl Model {
                 return Err(tr!("core.objects.a_group_cannot_have_a_component_mapping"));
             }
         }
-        self.validate_definition_nesting()?;
+        self.validate_definition_nesting_with_parents(&parents)?;
         if self
             .hidden
             .iter()

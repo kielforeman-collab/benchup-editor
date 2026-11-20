@@ -19,8 +19,20 @@ impl Plane {
         DVec2::new(d.dot(self.u), d.dot(self.v))
     }
 }
+fn has_duplicate_vertices(ring: &[u64]) -> bool {
+    if ring.len() <= 16 {
+        for i in 0..ring.len() {
+            if ring[i + 1..].contains(&ring[i]) {
+                return true;
+            }
+        }
+        false
+    } else {
+        ring.iter().copied().collect::<BTreeSet<_>>().len() != ring.len()
+    }
+}
 pub fn plane(model: &Model, ring: &[u64]) -> Option<Plane> {
-    if ring.len() < 3 || ring.iter().copied().collect::<BTreeSet<_>>().len() != ring.len() {
+    if ring.len() < 3 || has_duplicate_vertices(ring) {
         return None;
     }
     let origin = model.vertices.get(&ring[0])?.position;
@@ -248,10 +260,37 @@ impl Model {
             .collect()
     }
     pub fn face_area(&self, face: &Face) -> f64 {
-        self.face_triangles(face)
-            .iter()
-            .map(|[a, b, c]| (*b - *a).cross(*c - *a).length() * 0.5)
-            .sum()
+        let Some(p) = plane(self, &face.vertices) else {
+            return 0.;
+        };
+        let mut total = 0.;
+        for (index, ring) in std::iter::once(&face.vertices)
+            .chain(&face.holes)
+            .enumerate()
+        {
+            if ring.len() < 3 {
+                return 0.;
+            }
+            let mut signed = 0.;
+            for i in 0..ring.len() {
+                let Some(a) = self.vertices.get(&ring[i]) else {
+                    return 0.;
+                };
+                let Some(b) = self.vertices.get(&ring[(i + 1) % ring.len()]) else {
+                    return 0.;
+                };
+                signed += (a.position - p.origin)
+                    .cross(b.position - p.origin)
+                    .dot(p.normal);
+            }
+            let area = signed.abs() * 0.5;
+            if index == 0 {
+                total += area;
+            } else {
+                total -= area;
+            }
+        }
+        total.max(0.)
     }
     pub fn face_contains(&self, face: &Face, point: DVec3, boundary: bool) -> bool {
         let Some(p) = plane(self, &face.vertices) else {

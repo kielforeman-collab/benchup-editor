@@ -169,10 +169,6 @@ impl Model {
                     ring.retain(|id| *id != vertex);
                 }
             }
-            for object in self.objects.values_mut() {
-                object.entities.remove(&second);
-                object.definition_entities.retain(|_, id| *id != second);
-            }
             pairs.remove(&pair(vertex, a));
             pairs.remove(&pair(vertex, b));
             pairs.insert(pair(a, b));

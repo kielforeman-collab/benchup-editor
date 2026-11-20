@@ -118,7 +118,7 @@ impl BenchUpApp {
     fn move_section_plane(&mut self, ctx: &egui::Context, axis: usize, value: f64) {
         if offset(&self.doc.display, axis) != value {
             set_offset(&mut self.doc.display, axis, value);
-            self.changed(ctx);
+            self.changed_without_geometry(ctx);
         }
     }
     pub(super) fn cancel_section_drag(&mut self, ctx: &egui::Context) {

@@ -688,10 +688,26 @@ impl Geometry {
         let point = |p: DVec3| (p - origin).as_vec3().to_array();
         let mut vertices = Vec::new();
         let mut surfaces: BTreeMap<(u64, u64), Vec<(DVec3, DVec3, u32)>> = BTreeMap::new();
-        for face in model.faces.values().filter(|f| {
-            !model.reference_images.contains_key(&f.id) && dirty.is_none_or(|dirty| dirty.contains(&f.id))
-                && entities.get(f.id).displayed(&key.display)
-        }) {
+        let target_faces: Vec<&benchup_core::Face> = if let Some(dirty) = dirty {
+            dirty
+                .iter()
+                .filter_map(|id| model.faces.get(id))
+                .filter(|f| {
+                    !model.reference_images.contains_key(&f.id)
+                        && entities.get(f.id).displayed(&key.display)
+                })
+                .collect()
+        } else {
+            model
+                .faces
+                .values()
+                .filter(|f| {
+                    !model.reference_images.contains_key(&f.id)
+                        && entities.get(f.id).displayed(&key.display)
+                })
+                .collect()
+        };
+        for face in target_faces {
             // Visibility IDs also address interaction states. Retained edges
             // can then ignore depth allowances from an erased incident face.
             let face_id = hierarchy.slot(face.id);
@@ -770,10 +786,20 @@ impl Geometry {
         }
         let mut edges = Vec::new();
         let mut endpoints: std::collections::BTreeMap<u64, Vec<u32>> = Default::default();
-        for edge in model.edges.values().filter(|e| {
-            dirty.is_none_or(|dirty| dirty.contains(&e.id))
-                && entities.get(e.id).displayed(&key.display)
-        }) {
+        let target_edges: Vec<&benchup_core::Edge> = if let Some(dirty) = dirty {
+            dirty
+                .iter()
+                .filter_map(|id| model.edges.get(id))
+                .filter(|e| entities.get(e.id).displayed(&key.display))
+                .collect()
+        } else {
+            model
+                .edges
+                .values()
+                .filter(|e| entities.get(e.id).displayed(&key.display))
+                .collect()
+        };
+        for edge in target_edges {
             for vertex in [edge.a, edge.b] {
                 endpoints.entry(vertex).or_default().push(hierarchy.slot(edge.id));
             }

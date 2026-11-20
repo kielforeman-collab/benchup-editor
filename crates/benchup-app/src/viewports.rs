@@ -714,7 +714,7 @@ impl BenchUpApp {
                         self.viewport = *rect;
                         // Match Shift+Orbit's direction, sensitivity and viewport scale.
                         self.doc.camera.pan(dv(pan) * self.general_settings.mouse_pan_speed(), rect.height() as f64);
-                        self.changed(ctx);
+                        self.camera_changed(ctx);
                     }
                 }
             }
@@ -725,7 +725,7 @@ impl BenchUpApp {
                         self.viewport = *rect;
                         self.doc.camera.zoom(scroll * self.general_settings.mouse_zoom_speed(),
                             dv(anchor - rect.min), dv(rect.size()));
-                        self.changed(ctx);
+                        self.camera_changed(ctx);
                     }
                 }
             }

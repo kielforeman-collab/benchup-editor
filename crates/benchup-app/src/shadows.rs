@@ -16,6 +16,9 @@ pub struct FaceShadow {
 #[derive(Clone, PartialEq)]
 struct Key {
     revision: u64,
+    entity_revision: Option<u64>,
+    hidden_objects: bool,
+    hidden_geometry: bool,
     angle: f64,
     elevation: f64,
     section: [Option<f64>; 3],
@@ -42,7 +45,10 @@ impl ShadowCache {
     /// A prepared cache accompanies the exact evaluated model. Its face-cache
     /// revision belongs to the worker, so rebase it when adopting that model.
     pub(crate) fn adopt_revision(&mut self, revision: u64) {
-        if let Some(key) = &mut self.key { key.revision = revision; }
+        if let Some(key) = &mut self.key {
+            key.revision = revision;
+            key.entity_revision = None;
+        }
     }
 
     pub fn update(&mut self, faces: &FaceCache, entities: &EntityCache, d: &DisplaySettings) {
@@ -51,26 +57,41 @@ impl ShadowCache {
             return;
         }
         let section = d.section_limits();
+        let entity_revision = entities.revision();
         // Hover/orbit frames only validate visibility; do not allocate fresh
         // face ID lists when the cached geometry is still valid.
-        if self.key.as_ref().is_some_and(|key| {
-            key.revision == faces.revision()
-                && key.angle == d.sun_angle
-                && key.elevation == d.sun_elevation
-                && key.section == section
-                && key.receivers.iter().copied().eq(faces
-                    .iter()
-                    .filter(|(id, face)| !face.reference_image && entities.get(*id).displayed(d))
-                    .map(|(id, _)| id))
+        if let Some(key) = &mut self.key
+            && key.revision == faces.revision()
+            && key.angle == d.sun_angle
+            && key.elevation == d.sun_elevation
+            && key.section == section
+        {
+            if key.entity_revision == Some(entity_revision)
+                && key.hidden_objects == d.hidden_objects
+                && key.hidden_geometry == d.hidden_geometry
+            {
+                return;
+            }
+            if key.receivers.iter().copied().eq(faces
+                .iter()
+                .filter(|(id, face)| !face.reference_image && entities.get(*id).displayed(d))
+                .map(|(id, _)| id))
                 && key.casters.iter().copied().eq(faces
                     .iter()
                     .filter(|(id, face)| !face.reference_image && !entities.get(*id).hidden)
                     .map(|(id, _)| id))
-        }) {
-            return;
+            {
+                key.entity_revision = Some(entity_revision);
+                key.hidden_objects = d.hidden_objects;
+                key.hidden_geometry = d.hidden_geometry;
+                return;
+            }
         }
         let key = Key {
             revision: faces.revision(),
+            entity_revision: Some(entity_revision),
+            hidden_objects: d.hidden_objects,
+            hidden_geometry: d.hidden_geometry,
             angle: d.sun_angle,
             elevation: d.sun_elevation,
             section,
