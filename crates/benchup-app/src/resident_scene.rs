@@ -680,13 +680,11 @@ impl Geometry {
     ) -> Self {
         let palette = Palette::for_ui(ui);
         let face_palette = FacePalette::for_ui(ui);
-        let origin = origin.unwrap_or_else(|| {
-            let bounds = model.vertices.values().map(|v| v.position).fold(
-                (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)),
-                |(lo, hi), p| (lo.min(p), hi.max(p)),
-            );
-            (bounds.0 + bounds.1) * 0.5
-        });
+        let bounds = model.vertices.values().map(|v| v.position).fold(
+            (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)),
+            |(lo, hi), p| (lo.min(p), hi.max(p)),
+        );
+        let origin = origin.unwrap_or((bounds.0 + bounds.1) * 0.5);
         let point = |p: DVec3| (p - origin).as_vec3().to_array();
         let mut vertices = Vec::new();
         let mut surfaces: BTreeMap<(u64, u64), Vec<(DVec3, DVec3, u32)>> = BTreeMap::new();

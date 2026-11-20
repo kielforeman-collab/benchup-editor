@@ -394,10 +394,6 @@ impl Model {
         }
         Ok(graph)
     }
-    pub(crate) fn validate_definition_nesting(&self) -> Result<(), &'static str> {
-        let graph = self.definition_dependencies()?;
-        Self::validate_definition_graph(graph)
-    }
     pub(crate) fn validate_definition_nesting_with_parents(
         &self,
         parents: &BTreeMap<u64, u64>,
