@@ -2,25 +2,9 @@
 use benchup_core::Model;
 use benchup_core::tr;
 
-// Published JavaScript artifacts are vendored to avoid an SDK, subprocess,
-// network request, or JavaScript build step in either application.
-#[cfg(target_arch = "wasm32")]
-const SKP_READER: &str = concat!(
-    "var benchupModules = {};\n",
-    "benchupModules.fflate = (function() { var exports = {}, module = {exports};\n",
-    include_str!("../vendor/skp/fflate.cjs"),
-    "\nreturn module.exports; })();\n",
-    "benchupModules.earcut = (function() { var exports = {}, module = {exports};\n",
-    include_str!("../vendor/skp/earcut.cjs"),
-    "\nreturn module.exports; })();\n",
-    "benchupModules.flatbuffers = (function() {\n",
-    include_str!("../vendor/skp/flatbuffers.js"),
-    "\nreturn flatbuffers; })();\n",
-    "benchupModules.openskp = (function() { var exports = {}, module = {exports}; var require = name => benchupModules[name];\n",
-    include_str!("../vendor/skp/openskp.cjs"),
-    "\nreturn module.exports; })();\n",
-    include_str!("skp_adapter.js"),
-);
+// On web builds, the vendored SKP JavaScript modules are copied to assets/skp/
+// by Trunk and lazy-loaded by skp_worker.js on the first .skp import so they do
+// not inflate the initial WASM download.
 
 // The native adapter and web worker return stable codes for BenchUp errors.
 fn skp_error_message(error: &str) -> &str {
@@ -110,7 +94,7 @@ pub async fn import_skp_async(bytes: &[u8], name: &str) -> Result<Model, String>
     let promise = launch
         .call2(
             &eframe::wasm_bindgen::JsValue::NULL,
-            &SKP_READER.into(),
+            &eframe::wasm_bindgen::JsValue::NULL,
             &js_sys::Uint8Array::from(bytes),
         )
         .map_err(js_error)?

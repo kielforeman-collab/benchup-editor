@@ -4,11 +4,24 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const base = path.resolve(__dirname, '../crates/benchup-app');
-const rust = fs.readFileSync(path.join(base, 'src/interchange.rs'), 'utf8');
-const concat = rust.split('const SKP_READER: &str = concat!(')[1].split('\n);')[0];
-// Read the very same concat/include_str inputs that Rust embeds.
-const source = Array.from(concat.matchAll(/include_str!\("([^"]+)"\)|"(?:\\.|[^"\\])*"/g), m =>
-    m[1] ? fs.readFileSync(path.resolve(base, 'src', m[1]), 'utf8') : JSON.parse(m[0])).join('');
+const indexHtml = fs.readFileSync(path.resolve(__dirname, '../index.html'), 'utf8');
+assert(indexHtml.includes('href="crates/benchup-app/vendor/skp" data-target-path="assets/skp"'));
+assert(indexHtml.includes('href="crates/benchup-app/src/skp_adapter.js" data-target-path="assets/skp"'));
+const source =
+    'var benchupModules = {};\n' +
+    'benchupModules.fflate = (function() { var exports = {}, module = {exports};\n' +
+    fs.readFileSync(path.join(base, 'vendor/skp/fflate.cjs'), 'utf8') +
+    '\nreturn module.exports; })();\n' +
+    'benchupModules.earcut = (function() { var exports = {}, module = {exports};\n' +
+    fs.readFileSync(path.join(base, 'vendor/skp/earcut.cjs'), 'utf8') +
+    '\nreturn module.exports; })();\n' +
+    'benchupModules.flatbuffers = (function() {\n' +
+    fs.readFileSync(path.join(base, 'vendor/skp/flatbuffers.js'), 'utf8') +
+    '\nreturn flatbuffers; })();\n' +
+    'benchupModules.openskp = (function() { var exports = {}, module = {exports}; var require = name => benchupModules[name];\n' +
+    fs.readFileSync(path.join(base, 'vendor/skp/openskp.cjs'), 'utf8') +
+    '\nreturn module.exports; })();\n' +
+    fs.readFileSync(path.join(base, 'src/skp_adapter.js'), 'utf8');
 const read = new Function('bytes', source + '\nreturn JSON.parse(benchupImport(bytes));');
 const modules = new Function(source + '\nreturn benchupModules;')();
 const sdk = modules.openskp;
@@ -194,3 +207,65 @@ for (const failure of ['constructor', 'postMessage', 'error', 'messageerror']) {
         assert.equal(terminated, failure === 'constructor' ? 0 : 1);
     });
 }
+
+test('worker lazy-loads and caches SKP modules from assets/skp/ when source is null', async () => {
+    const files = {
+        'fflate.cjs': fs.readFileSync(path.join(base, 'vendor/skp/fflate.cjs'), 'utf8'),
+        'earcut.cjs': fs.readFileSync(path.join(base, 'vendor/skp/earcut.cjs'), 'utf8'),
+        'flatbuffers.js': fs.readFileSync(path.join(base, 'vendor/skp/flatbuffers.js'), 'utf8'),
+        'openskp.cjs': fs.readFileSync(path.join(base, 'vendor/skp/openskp.cjs'), 'utf8'),
+        'skp_adapter.js': fs.readFileSync(path.join(base, 'src/skp_adapter.js'), 'utf8'),
+    };
+    const prevLocation = globalThis.location;
+    const prevFetch = globalThis.fetch;
+    globalThis.__benchupSkpSourcePromise = undefined;
+    let fetches = 0;
+    globalThis.location = {href: 'https://benchup.example/play/'};
+    globalThis.fetch = async url => {
+        fetches++;
+        const name = String(url).split('/').pop();
+        assert.equal(String(url), `https://benchup.example/play/assets/skp/${name}`);
+        return {ok: true, text: async () => files[name]};
+    };
+    try {
+        const host = workerHost();
+        const body = fs.readFileSync(path.join(base, 'src/skp_worker.js'), 'utf8');
+        const {Worker: NodeWorker} = require('node:worker_threads');
+        const urls = new Map();
+        class URLMock extends globalThis.URL {
+            static createObjectURL(blob) { const id = 'blob:lazy-' + urls.size; urls.set(id, blob); return id; }
+            static revokeObjectURL(id) { urls.delete(id); }
+        }
+        class WorkerMock {
+            constructor(url) {
+                this.pending = [];
+                urls.get(url).text().then(code => {
+                    this.worker = new NodeWorker(`const {parentPort}=require('node:worker_threads');
+                        globalThis.onmessage=null;globalThis.postMessage=data=>parentPort.postMessage(data);
+                        ${code}
+                        parentPort.on('message',data=>onmessage({data}));`, {eval: true});
+                    this.worker.on('message', data => this.onmessage({data}));
+                    this.worker.on('error', error => this.onerror({message: error.message}));
+                    for (const [data, transfer] of this.pending) this.worker.postMessage(data, transfer);
+                    this.pending = [];
+                });
+            }
+            postMessage(data, transfer) {
+                if (this.worker) this.worker.postMessage(data, transfer);
+                else this.pending.push([data, transfer]);
+            }
+            terminate() { this.worker.terminate(); }
+        }
+        const launch = new Function('source', 'bytes', 'URL', 'Blob', 'Worker', body);
+        const first = JSON.parse(await launch(null, new Uint8Array(fs.readFileSync(fixture)), URLMock, Blob, WorkerMock));
+        const second = JSON.parse(await launch(null, new Uint8Array(fs.readFileSync(fixture)), URLMock, Blob, WorkerMock));
+        assert.equal(Object.keys(first.faces).length, 2);
+        assert.equal(Object.keys(second.faces).length, 2);
+        assert.equal(fetches, 5, 'SKP modules should be fetched once and cached');
+        assert.ok(host);
+    } finally {
+        globalThis.__benchupSkpSourcePromise = undefined;
+        globalThis.location = prevLocation;
+        globalThis.fetch = prevFetch;
+    }
+});
