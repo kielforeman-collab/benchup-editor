@@ -1,8 +1,12 @@
 // One worker per geometry revision. Source parsing and all exact solid work run
 // there; selection requests are tiny and old-project jobs can be terminated.
-const moduleURL = performance.getEntriesByType('resource').findLast(entry => /benchup-app-[^/]+\.js(?:\?|$)/.test(entry.name))?.name;
+const sameOrigin = entry => {
+  try { return new URL(entry.name, location.href).origin === location.origin; }
+  catch { return false; }
+};
+const moduleURL = performance.getEntriesByType('resource').findLast(entry => sameOrigin(entry) && /benchup-app-[^/]+\.js(?:\?|$)/.test(entry.name))?.name;
 if (!moduleURL) throw new Error('Cannot locate the application module for measurements.');
-const wasmURL=performance.getEntriesByType('resource').findLast(entry=>entry.name.endsWith('_bg.wasm'))?.name;
+const wasmURL=performance.getEntriesByType('resource').findLast(entry=>sameOrigin(entry)&&entry.name.endsWith('_bg.wasm'))?.name;
 if(!wasmURL)throw new Error('Cannot locate the application WebAssembly module for measurements.');
 const code = `
 const initialized=import(${JSON.stringify(moduleURL)}).then(async module=>{await module.default({module_or_path:${JSON.stringify(wasmURL)}});return module});

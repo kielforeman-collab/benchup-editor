@@ -1354,9 +1354,13 @@ std::vector<uint64_t> probe_layer_anchor_bases(const ByteBuffer& data, int ver, 
     throw std::runtime_error("base probe: anchor resolved to " + std::get<1>(anchor));
   uint64_t s = std::get<0>(anchor);
   std::vector<uint64_t> result;
+  std::unordered_set<uint64_t> seen;
   for (auto rel : layer_slots) {
     int64_t candidate = int64_t(s) - (int64_t(rel) - int64_t(b0));
-    if (candidate > 0 && uint64_t(candidate) < b0) result.push_back(uint64_t(candidate));
+    if (candidate > 0 && uint64_t(candidate) < b0 && seen.insert(uint64_t(candidate)).second) {
+      result.push_back(uint64_t(candidate));
+      if (result.size() >= 256) break;
+    }
   }
   return result;
 }
@@ -1536,10 +1540,15 @@ ParsedAttrDictionaries extract_legacy_attribute_dictionaries(
   return out;
 }
 
+struct FillBudget {
+  std::size_t coedges{};
+  std::size_t instances{};
+  std::size_t attr_entries{};
+};
+
 void fill(GeometryBuilder& b,
           const std::vector<std::tuple<uint64_t, std::string, std::shared_ptr<V>>>& ents,
-          const std::unordered_map<uint64_t, Entry>& slots) {
-  std::size_t total_coedges = 0;
+          const std::unordered_map<uint64_t, Entry>& slots, FillBudget& budget) {
   for (auto& x : ents) {
     auto s = std::get<0>(x);
     auto v = std::get<2>(x);
@@ -1558,7 +1567,7 @@ void fill(GeometryBuilder& b,
         std::vector<CoEdge> co;
         for (auto& u : lp->uses) {
           if (!u) continue;
-          if (++total_coedges > 1000000)
+          if (++budget.coedges > 1000000)
             throw std::runtime_error("benchup.skp.model_too_large");
           auto i = slots.find(u->edge);
           if (i != slots.end() && i->second.v) {
@@ -1596,6 +1605,8 @@ void fill(GeometryBuilder& b,
       }
       b.faces[s] = std::move(f);
     } else if (v->k == "instance") {
+      if (++budget.instances > 1000000)
+        throw std::runtime_error("benchup.skp.model_too_large");
       RawInstance i;
       i.name = v->name;
       i.ref_idx = v->def;
@@ -1604,11 +1615,19 @@ void fill(GeometryBuilder& b,
       if (v->layer) i.layer = std::to_string(v->layer);
       i.hidden = v->hidden != 0;
       auto dicts = extract_legacy_attribute_dictionaries(v->attrs, slots);
+      for (const auto& [dn, entries] : dicts) {
+        (void)dn;
+        if (entries.size() > 1000000 || budget.attr_entries > 1000000 - entries.size())
+          throw std::runtime_error("benchup.skp.model_too_large");
+        budget.attr_entries += entries.size();
+      }
       auto dc = dicts.find("dynamic_attributes");
       if (dc != dicts.end()) i.properties = stringify_attr_dict(dc->second);
       i.attribute_dicts = std::move(dicts);
       b.instances.push_back(std::move(i));
     } else if (v->k == "image") {
+      if (++budget.instances > 1000000)
+        throw std::runtime_error("benchup.skp.model_too_large");
       // Placed exactly like an ordinary component instance - same
       // transform/definition-reference shape - the only difference is the
       // definition it points at is flagged is_image=true (set below via
@@ -1814,7 +1833,7 @@ std::vector<RawPage> scan_pages_for_layers(const ByteBuffer& data, std::size_t s
     if (nlen == 0 || nlen > 40) continue;
     size_t name_start = nlen_pos + 1;
     size_t name_end = name_start + 2 * size_t(nlen);
-    if (name_end + 7 > n) continue;
+    if (name_end + 8 > n) continue;
     if (!(data[name_end] == 255 && data[name_end + 1] == 254 && data[name_end + 2] == 255 &&
           data[name_end + 3] == 0)) {
       continue;  // second name must be empty
@@ -1972,6 +1991,7 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
       if (!s.second.cls && s.second.name == "CImage" && s.second.v) {
         image_def_ids.insert(s.second.v->def);
       }
+    FillBudget budget;
     for (auto& s : ar.slots)
       if (!s.second.cls && s.second.name == "CComponentDefinition" && s.second.v) {
         RawDefinition d;
@@ -1980,10 +2000,10 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
         d.always_faces_camera = s.second.v->faces_camera;
         d.shadows_face_sun = s.second.v->shadows_face_sun;
         d.is_image = image_def_ids.count(s.first) != 0;
-        fill(d.builder, s.second.v->ents, ar.slots);
+        fill(d.builder, s.second.v->ents, ar.slots, budget);
         out.definitions[s.first] = std::move(d);
       }
-    fill(out.root.builder, root, ar.slots);
+    fill(out.root.builder, root, ar.slots, budget);
     try {
       out.pages =
           scan_pages_for_layers(data, ar.r.p, LegacySlotTable{ar.slots, ar.class_slot, ar.next});

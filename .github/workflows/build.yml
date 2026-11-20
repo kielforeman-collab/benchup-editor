@@ -104,6 +104,27 @@ jobs:
       - name: Install pinned Velopack tool
         run: dotnet tool install --global vpk --version "$VPK_VERSION"
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-${{ matrix.target }}
+
+      - name: Build release executable
+        run: cargo build -p benchup-app --bin benchup-app --release --locked --target "${{ matrix.target }}"
+
+      - name: Test updates, identity migration, and project compatibility
+        run: |
+          cargo test -p benchup-app --lib --release --locked --target "${{ matrix.target }}" -- \
+            updates:: update_repository:: identity:: storage:: project_files:: server_config::
+
+      - name: Stage distribution
+        run: |
+          mkdir -p dist package/licenses/skp
+          cp "target/${{ matrix.target }}/release/${{ matrix.executable }}" package/
+          cp LICENSE README.md package/
+          cp crates/benchup-app/vendor/skp/LICENSE* package/licenses/skp/
+          cp crates/benchup-app/vendor/skp/native/miniz/LICENSE package/licenses/skp/LICENSE-miniz
+
       - name: Check Windows signing credentials
         id: windows-signing
         if: runner.os == 'Windows'
@@ -133,27 +154,6 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: python scripts/configure_macos_signing.py
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: desktop-${{ matrix.target }}
-
-      - name: Build release executable
-        run: cargo build -p benchup-app --bin benchup-app --release --locked --target "${{ matrix.target }}"
-
-      - name: Test updates, identity migration, and project compatibility
-        run: |
-          cargo test -p benchup-app --lib --release --locked --target "${{ matrix.target }}" -- \
-            updates:: update_repository:: identity:: storage:: project_files:: server_config::
-
-      - name: Stage distribution
-        run: |
-          mkdir -p dist package/licenses/skp
-          cp "target/${{ matrix.target }}/release/${{ matrix.executable }}" package/
-          cp LICENSE README.md package/
-          cp crates/benchup-app/vendor/skp/LICENSE* package/licenses/skp/
-          cp crates/benchup-app/vendor/skp/native/miniz/LICENSE package/licenses/skp/LICENSE-miniz
 
       - name: Create installer and update feed
         env:

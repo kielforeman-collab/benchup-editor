@@ -134,10 +134,43 @@ static constexpr std::size_t kMaxXmlBytes = 256 * 1024;
 // sequential replacements: sequential replacement would double-decode
 // "&amp;lt;" into "<" instead of the correct "&lt;".
 std::string attr(const std::string& s, const std::string& key) {
-  if (s.size() > kMaxXmlBytes) return "";
-  std::regex r("(?:^|\\s)" + key + "\\s*=\\s*[\\\"']([^\\\"']*)[\\\"']", std::regex::icase);
-  std::smatch m;
-  return std::regex_search(s, m, r) ? decode_xml_entities(m[1].str()) : "";
+  if (s.size() > kMaxXmlBytes || key.empty()) return "";
+  std::size_t i = 0;
+  const std::size_t n = s.size();
+  while (i < n) {
+    while (i < n && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    std::size_t name_start = i;
+    while (i < n && !std::isspace(static_cast<unsigned char>(s[i])) && s[i] != '=' && s[i] != '/' &&
+           s[i] != '>')
+      ++i;
+    std::size_t name_len = i - name_start;
+    while (i < n && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    if (i >= n || s[i] != '=') {
+      if (i == name_start) ++i;
+      continue;
+    }
+    ++i;
+    while (i < n && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    if (i >= n || (s[i] != '"' && s[i] != '\'')) continue;
+    char quote = s[i++];
+    std::size_t val_start = i;
+    while (i < n && s[i] != quote) ++i;
+    if (i >= n) break;
+    std::size_t val_len = i - val_start;
+    ++i;
+    if (name_len == key.size()) {
+      bool match = true;
+      for (std::size_t j = 0; j < name_len; ++j) {
+        if (std::tolower(static_cast<unsigned char>(s[name_start + j])) !=
+            std::tolower(static_cast<unsigned char>(key[j]))) {
+          match = false;
+          break;
+        }
+      }
+      if (match) return decode_xml_entities(s.substr(val_start, val_len));
+    }
+  }
+  return "";
 }
 
 int integer(const std::string& s, int fallback) {
@@ -166,7 +199,7 @@ std::shared_ptr<RawMaterial> material_xml(Zip& zip, const std::string& path,
   (void)zip;
   if (bytes.size() > kMaxXmlBytes) return {};
   auto xml = str(bytes);
-  std::regex tag("<(?:[A-Za-z_][\\w.-]*:)?material\\b([^>]*)>", std::regex::icase);
+  static const std::regex tag("<(?:[A-Za-z_][\\w.-]*:)?material\\b([^>]*)>", std::regex::icase);
   std::smatch m;
   if (!std::regex_search(xml, m, tag)) return {};
   auto a = m[1].str();
@@ -180,7 +213,7 @@ std::shared_ptr<RawMaterial> material_xml(Zip& zip, const std::string& path,
     out->transparency = std::clamp(1.0 - number(attr(a, "trans"), 0), 0.0, 1.0);
   out->colorized = attr(a, "type") == "2";
   out->colorize_type = integer(attr(a, "colorizeType"), 0);
-  std::regex tr("<(?:[A-Za-z_][\\w.-]*:)?texture\\b([^>]*)>", std::regex::icase);
+  static const std::regex tr("<(?:[A-Za-z_][\\w.-]*:)?texture\\b([^>]*)>", std::regex::icase);
   if (std::regex_search(xml, m, tr)) {
     auto ta = m[1].str();
     RawTexture t;
@@ -206,9 +239,32 @@ std::shared_ptr<RawMaterial> material_xml(Zip& zip, const std::string& path,
 std::map<std::string, std::string> attributes(const std::string& s) {
   std::map<std::string, std::string> out;
   if (s.size() > kMaxXmlBytes) return out;
-  std::regex r("([A-Za-z_][\\w.:-]*)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')");
-  for (auto i = std::sregex_iterator(s.begin(), s.end(), r); i != std::sregex_iterator(); ++i)
-    out[(*i)[1].str()] = decode_xml_entities((*i)[2].matched ? (*i)[2].str() : (*i)[3].str());
+  std::size_t i = 0;
+  const std::size_t n = s.size();
+  while (i < n) {
+    while (i < n && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    std::size_t name_start = i;
+    while (i < n && !std::isspace(static_cast<unsigned char>(s[i])) && s[i] != '=' && s[i] != '/' &&
+           s[i] != '>')
+      ++i;
+    std::size_t name_len = i - name_start;
+    while (i < n && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    if (i >= n || s[i] != '=') {
+      if (i == name_start) ++i;
+      continue;
+    }
+    ++i;
+    while (i < n && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    if (i >= n || (s[i] != '"' && s[i] != '\'')) continue;
+    char quote = s[i++];
+    std::size_t val_start = i;
+    while (i < n && s[i] != quote) ++i;
+    if (i >= n) break;
+    std::size_t val_len = i - val_start;
+    ++i;
+    if (name_len > 0)
+      out[s.substr(name_start, name_len)] = decode_xml_entities(s.substr(val_start, val_len));
+  }
   return out;
 }
 
@@ -530,9 +586,13 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   if (off == std::string::npos)
     throw SkpParseError("No ZIP container found", ParseStage::zip_extract);
   Zip zip(data, off);
-  for (auto& n : zip.names)
+  std::size_t xml_count = 0;
+  static constexpr std::size_t kMaxXmlEntries = 4096;
+  for (auto& n : zip.names) {
+    if (xml_count >= kMaxXmlEntries) break;
     if (n.rfind("materials/", 0) == 0 && n.size() >= 12 &&
         n.substr(n.size() - 12) == "material.xml") {
+      ++xml_count;
       if (auto b = zip.get(n))
         if (auto m = material_xml(zip, n, *b)) {
           auto slash = n.find('/', 10);
@@ -548,13 +608,18 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
           }
         }
     }
-  for (auto& n : zip.names)
-    if (n.rfind("styles/", 0) == 0 && n.size() >= 9 && n.substr(n.size() - 9) == "style.xml")
+  }
+  for (auto& n : zip.names) {
+    if (xml_count >= kMaxXmlEntries) break;
+    if (n.rfind("styles/", 0) == 0 && n.size() >= 9 && n.substr(n.size() - 9) == "style.xml") {
+      ++xml_count;
       if (auto b = zip.get(n))
         if (auto s = style_xml(*b)) {
           if (n.size() > 17) s->folder = n.substr(7, n.size() - 17);  // styles/<folder>/style.xml
           p.styles.push_back(std::move(*s));
         }
+    }
+  }
   auto model = zip.get("model.dat");
   if (!model) throw SkpParseError("model.dat not found in ZIP container", ParseStage::zip_extract);
   auto hs = headers(*model, 0, model->size());

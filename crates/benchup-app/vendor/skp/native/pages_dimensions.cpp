@@ -36,10 +36,10 @@ std::vector<FlatTlvItem> tlv_items_int(const ByteBuffer& buf) {
   std::size_t off = 0;
   std::size_t n = buf.size();
   while (off < n) {
-    if (off + 6 > n) return {};
+    if (n - off < 6) return {};
     std::uint16_t tag = static_cast<std::uint16_t>(buf[off] | (buf[off + 1] << 8));
     auto ln = read_u32(buf, off + 2);
-    if (tag == 0 || off + 6 + ln > n) return {};
+    if (tag == 0 || ln > n - off - 6) return {};
     items.push_back({tag, ByteBuffer(buf.begin() + off + 6, buf.begin() + off + 6 + ln)});
     off += 6 + ln;
   }
@@ -217,14 +217,18 @@ std::vector<RawDimension> parse_dimensions(
     return local_it->second;  // model-root vertex - already world
   };
 
-  while (true) {
+  static constexpr std::size_t kMaxDimensionRecordBytes = 64 * 1024;
+  std::size_t scanned_bytes = 0;
+  while (i < n) {
     auto found = std::search(model_dat.begin() + i, model_dat.end(), needle.begin(), needle.end());
     if (found == model_dat.end()) break;
     std::size_t j = static_cast<std::size_t>(found - model_dat.begin());
     i = j + 1;
-    if (j + 6 > n) continue;
+    if (n - j < 6) continue;
     auto ln = read_u32(model_dat, j + 2);
-    if (ln < 40 || j + 6 + ln > n) continue;
+    if (ln < 40 || ln > kMaxDimensionRecordBytes || ln > n - j - 6) continue;
+    if (scanned_bytes > n || ln > n - scanned_bytes) break;
+    scanned_bytes += ln;
     ByteBuffer body_bytes(model_dat.begin() + j + 6, model_dat.begin() + j + 6 + ln);
     auto body = tlv_items_int(body_bytes);
     if (body.empty()) continue;
@@ -250,6 +254,7 @@ std::vector<RawDimension> parse_dimensions(
     d.normal = vec3_of(normal_b);
     d.offset = (off_b && off_b->size() == 8) ? read_f64(*off_b, 0) : 0.0;
     dims.push_back(std::move(d));
+    i = j + 6 + ln;
   }
   return dims;
 }

@@ -169,7 +169,7 @@ impl Socket {
                 ctx.request_repaint();
             }) as Box<dyn FnMut()>);
             let create = js_sys::Function::new_with_args(
-                tr!("realtime.url_ticket_connection_queue_wake"),
+                "url,ticket,connection,queue,wake",
                 r#"
                 const socket=new WebSocket(url);
                 const emit=v=>{queue.push(JSON.stringify(v));wake();};

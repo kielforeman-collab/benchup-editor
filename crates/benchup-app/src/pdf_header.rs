@@ -64,6 +64,16 @@ pub(crate) fn layout(
     if !line.is_empty() || lines.is_empty() {
         lines.push(line);
     }
+    const MAX_TITLE_LINES: usize = 3;
+    if lines.len() > MAX_TITLE_LINES {
+        lines.truncate(MAX_TITLE_LINES);
+        if let Some(last) = lines.last_mut() {
+            while !last.is_empty() && measure(&format!("{last}..."), 20.) > max_width {
+                last.pop();
+            }
+            last.push_str("...");
+        }
+    }
     let mut y = top;
     for line in lines {
         text.push(Text {

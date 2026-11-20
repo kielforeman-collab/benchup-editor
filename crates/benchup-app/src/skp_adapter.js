@@ -39,6 +39,7 @@ function benchupImport(bytes) {
             vertices.set(v.id, id);
             model.vertices[id] = {id, position: point(v, transforms)};
         }
+        charge(def.edges.length);
         for (const e of def.edges) {
             const a = vertices.get(e.v1Id), b = vertices.get(e.v2Id);
             if (a === undefined || b === undefined) throw new Error('benchup.skp.missing_vertex');

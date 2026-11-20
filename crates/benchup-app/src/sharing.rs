@@ -878,9 +878,13 @@ impl BenchUpApp {
             modal.header(|ui| { ui.text_heading(tr!("sharing.share_project")); });
             modal.body(|ui| {
                 if let Some(link) = &self.doc.shared_project {
-                    let url = format!("{}/share/{}", link.server.trim_end_matches('/'), link.id);
-                    ui.label(tr!("sharing.persistent_invitation_link_author_approval_required_for_reading"));
-                    ui.horizontal_wrapped(|ui| { ui.hyperlink(&url); if ui.button(tr!("sharing.copy_link")).clicked() { ctx.copy_text(url); } });
+                    let configured = self.account.server.trim_end_matches('/');
+                    let linked = link.server.trim_end_matches('/');
+                    if linked == configured && valid_id(&link.id) {
+                        let url = format!("{linked}/share/{}", link.id);
+                        ui.label(tr!("sharing.persistent_invitation_link_author_approval_required_for_reading"));
+                        ui.horizontal_wrapped(|ui| { ui.hyperlink(&url); if ui.button(tr!("sharing.copy_link")).clicked() { ctx.copy_text(url); } });
+                    }
                     if ui.button(tr!("sharing.keep_local_as_separate_project")).clicked() { action = Some(("detach".into(), String::new())); }
                     if let Some(author) = &self.doc.project_author { ui.label(tr!("sharing.original_project_author", author.name)); }
                     let access = self.sharing_access_label();

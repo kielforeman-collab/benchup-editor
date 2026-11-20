@@ -689,6 +689,9 @@ impl History {
             *self = Self::default();
             return;
         }
+        if self.actions.len() > LIMIT {
+            self.actions.drain(..self.actions.len() - LIMIT);
+        }
         if self.redo.len() > LIMIT {
             self.redo.drain(..self.redo.len() - LIMIT);
         }

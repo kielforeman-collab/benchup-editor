@@ -71,6 +71,7 @@ struct Import {
       auto out=Json::make_object();out.set("id",id);out.set("position",std::move(position));
       vertices.set(std::to_string(id),std::move(out));
     }
+    charge(def.edges.size());
     for(const auto& [old,e]:def.edges) {
       if(!remap.count(e.v1_id) || !remap.count(e.v2_id)) throw std::runtime_error("benchup.skp.missing_vertex");
       const auto a=remap.at(e.v1_id), b=remap.at(e.v2_id);
