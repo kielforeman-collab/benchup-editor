@@ -34,3 +34,71 @@ jobs:
 
       - name: Test core
         run: cargo test --locked -p benchup-core
+
+  test-app:
+    name: Test app & WASM check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential pkg-config libx11-dev libxcb1-dev \
+            libxkbcommon-dev libwayland-dev libegl1-mesa-dev libudev-dev
+
+      - name: Install Rust and WebAssembly target
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: pr-app
+
+      - name: Test app parsers, storage, updates, and config
+        run: |
+          cargo test --locked -p benchup-app --lib -- \
+            updates:: update_repository:: identity:: storage:: project_files:: server_config:: interchange:: mesh_exchange::
+
+      - name: Check WebAssembly target compilation
+        run: cargo check --locked -p benchup-app --target wasm32-unknown-unknown
+
+  test-scripts:
+    name: Test JS & Python scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Run Python script tests
+        run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
+
+      - name: Run Node.js web and SKP worker tests
+        run: |
+          node --test \
+            scripts/test_skp_import.cjs \
+            scripts/test_project_save.cjs \
+            scripts/test_web_i18n.cjs \
+            scripts/test_web_shortcuts.cjs \
+            scripts/test_space_mouse_web.mjs
